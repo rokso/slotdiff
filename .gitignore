@@ -1,0 +1,22 @@
+node_modules/
+dist/
+*.js.map
+*.d.ts.map
+
+# pnpm
+.pnpm-store/
+
+# env files
+.env
+.env.local
+
+# editor
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# test artifacts
+coverage/
+

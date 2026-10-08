@@ -1,0 +1,72 @@
+{
+  "name": "slotdiff",
+  "version": "0.1.0-alpha.1",
+  "description": "Storage layout diff for upgradeable Solidity contracts: compare a local build or a live deployment against another",
+  "license": "MIT",
+  "author": "Rohit Solia (https://github.com/rokso)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rokso/slotdiff.git"
+  },
+  "homepage": "https://github.com/rokso/slotdiff#readme",
+  "bugs": {
+    "url": "https://github.com/rokso/slotdiff/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "src",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc --project tsconfig.build.json",
+    "build:watch": "tsc --project tsconfig.build.json --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc",
+    "lint": "eslint . && prettier --check .",
+    "format": "prettier --write .",
+    "prepublishOnly": "pnpm lint && pnpm test",
+    "clean": "rm -rf dist",
+    "prepack": "pnpm build"
+  },
+  "packageManager": "pnpm@9.0.0",
+  "dependencies": {
+    "@openzeppelin/upgrades-core": "^1.46.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.0.0",
+    "eslint": "^10.2.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.5.0",
+    "prettier": "^3.8.2",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.58.2",
+    "vitest": "^4.1.0"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "keywords": [
+    "ethereum",
+    "solidity",
+    "upgradeable",
+    "proxy",
+    "storage-layout",
+    "upgrade-safety",
+    "foundry",
+    "hardhat"
+  ],
+  "sideEffects": false
+}
