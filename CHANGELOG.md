@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `findBuildInfo`: reads Foundry, Hardhat 2 and Hardhat 3 build info. The build is chosen by
+  content: only one whose target and imports still match the files on disk, so the stale files
+  Foundry keeps after each edit are never used. Its `input` holds only what the target imports.
 - Explorer errors no longer repeat fetch's error text, which can quote the request URL and with
   it the API key.
 
