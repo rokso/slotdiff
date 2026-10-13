@@ -39,9 +39,14 @@ Node 22.12+. Works from ESM and CommonJS.
 ### Live proxy vs a local build
 
 ```ts
-import { readFileSync } from "node:fs";
 import { JsonRpcProvider } from "ethers";
-import { diffLayouts, getSolc, layoutFromSource, resolveProxyLayout } from "slotdiff";
+import {
+  diffLayouts,
+  findBuildInfo,
+  getSolc,
+  layoutFromSource,
+  resolveProxyLayout,
+} from "slotdiff";
 
 // Any object with send(method, params): an ethers JsonRpcProvider or Hardhat's network provider.
 const provider = new JsonRpcProvider(process.env.RPC_URL);
@@ -50,10 +55,10 @@ const apiKey = process.env.ETHERSCAN_API_KEY;
 // 1. The layout of whatever the proxy runs now, proven against its deployed code.
 const live = await resolveProxyLayout(provider, "0xProxy", { explorer: { apiKey } });
 
-// 2. The layout of the new version, from your build info (see below for each tool).
-const buildInfo = JSON.parse(readFileSync("out/build-info/<id>.json", "utf8"));
-const solc = await getSolc(buildInfo.solcLongVersion);
-const next = await layoutFromSource(buildInfo.input, solc, "src/Vault.sol:Vault");
+// 2. The layout of the new version, from your build info (Foundry, Hardhat 2 or 3).
+const build = await findBuildInfo(process.cwd(), "src/Vault.sol:Vault");
+const solc = await getSolc(build.solcVersion);
+const next = await layoutFromSource(build.input, solc, build.contract);
 
 // 3. Compare.
 const report = diffLayouts(live.record.layout, next);
@@ -63,7 +68,10 @@ if (!report.ok) {
 }
 ```
 
-Where the build info lives:
+`findBuildInfo` picks the build whose sources still match the files on disk, so the stale build
+info Foundry keeps after each edit is never used, and its `input` holds only the target and what
+it imports. Pass `{ file }` to use one file as is (for example a CI artifact). Where the build
+info lives:
 
 | Tool      | Build info                                                                                             | Contract name                       |
 | --------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------- |
@@ -71,7 +79,7 @@ Where the build info lives:
 | Hardhat 2 | `artifacts/build-info/*.json`                                                                          | `contracts/Vault.sol:Vault`         |
 | Hardhat 3 | `artifacts/build-info/<id>.json`; the compiler output is in `<id>.output.json` next to it              | `project/contracts/Vault.sol:Vault` |
 
-Each holds `input` and `solcLongVersion`. Use the source name exactly as it appears in `input.sources`.
+With `findBuildInfo`, Hardhat 3's `project/` prefix is optional.
 
 `explain()` gives OpenZeppelin's report, for example:
 
@@ -122,16 +130,16 @@ deployed code with your compiler output and returns a record only when they prov
 build.
 
 ```ts
-import { proveLocalBuild } from "slotdiff";
+import { findBuildInfo, getSolc, layoutFromSource, proveLocalBuild } from "slotdiff";
 
-// Hardhat 3: read `output` from `<id>.output.json` instead.
-const compiled = buildInfo.output.contracts["src/Vault.sol"].Vault.evm.deployedBytecode;
+const build = await findBuildInfo(process.cwd(), "src/Vault.sol:Vault");
+const solc = await getSolc(build.solcVersion);
 const { bytecodeMatch, record } = await proveLocalBuild(provider, impl, {
-  contract: "src/Vault.sol:Vault",
+  contract: build.contract,
   compiler: solc.longVersion,
-  layout: await layoutFromSource(buildInfo.input, solc, "src/Vault.sol:Vault"),
-  deployedBytecode: compiled.object,
-  immutableReferences: compiled.immutableReferences,
+  layout: await layoutFromSource(build.input, solc, build.contract),
+  deployedBytecode: build.deployedBytecode!,
+  immutableReferences: build.immutableReferences,
 });
 if (record === undefined) throw new Error(`Not the deployed build (${bytecodeMatch})`);
 ```
@@ -184,6 +192,7 @@ newer slotdiff.
 | `verifyRecord(provider, address, value)`                     | Load a saved record, checked against the chain                           |
 | `parseRecord(value, address?)`                               | Load a saved record, checked offline                                     |
 | `layoutFromSource(input, solc, "file.sol:Name")`             | Layout from standard-json input, including ERC-7201 namespaces. No proof |
+| `findBuildInfo(root, contract, { file? })`                   | Your build info for a contract: input, compiler version, deployed code   |
 | `getSolc(version)`                                           | Native solc, from a cache or downloaded and checksum-verified            |
 | `readProxy`, `readImplementation`, `readCode`, `readChainId` | Chain reads                                                              |
 | `fetchVerifiedSource(chainId, address, explorer)`            | Verified standard-json source from an Etherscan-compatible explorer      |
