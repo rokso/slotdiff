@@ -25,7 +25,17 @@ export {
 } from "./explorer.js";
 export { getSolc, type SolcOptions, type SolcRunner } from "./solc.js";
 export { findBuildInfo, type BuildInfoOptions, type BuildInfoContract } from "./build-info.js";
-export { layoutFromSource } from "./reconstruct.js";
+export {
+  layoutFromSource,
+  analyzeSource,
+  SAFETY_ERROR_KINDS,
+  type SourceAnalysis,
+  type SafetyOptions,
+  type SafetyReport,
+  type SafetyError,
+  type SafetyErrorKind,
+  type ProxyKind,
+} from "./reconstruct.js";
 export {
   compareDeployedBytecode,
   isProvingMatch,

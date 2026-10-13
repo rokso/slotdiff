@@ -8,27 +8,34 @@
  */
 
 import {
+  getErrors,
   getStorageLayout,
+  inferProxyKind,
   isNamespaceSupported,
   makeNamespacedInput,
   solcInputOutputDecoder,
   trySanitizeNatSpec,
+  UpgradeableContractErrorReport,
   validate,
+  type ProxyDeployment,
   type SolcInput,
   type SolcOutput,
   type StorageLayout,
+  type ValidationRunData,
+  type Version,
 } from "@openzeppelin/upgrades-core";
+// Not exported from the package index; the package has no exports map.
+import { errorKinds, type ValidationError } from "@openzeppelin/upgrades-core/dist/validate/run.js";
 import { compareDeployedBytecode, isProvingMatch, type ProvingMatch } from "./bytecode.js";
 import { LayoutIntegrityError } from "./errors.js";
 import type { VerifiedSource } from "./explorer.js";
 import type { SolcRunner } from "./solc.js";
 
-export interface ReconstructedLayout {
+export interface ReconstructedLayout extends SourceAnalysis {
   /** Fully qualified name, `source.sol:Contract`. */
   contract: string;
   compiler: string;
   bytecodeMatch: ProvingMatch;
-  layout: StorageLayout;
 }
 
 // validate() reads evm.bytecode for every contract, so codegen is requested
@@ -68,7 +75,7 @@ export async function reconstructLayout(
     contract,
     compiler: source.solcLongVersion,
     bytecodeMatch,
-    layout: await extractLayout(input, output, solc, contract),
+    ...(await analyze(input, output, solc, contract)),
   };
 }
 
@@ -82,17 +89,102 @@ export async function layoutFromSource(
   solc: SolcRunner,
   contract: string,
 ): Promise<StorageLayout> {
-  const selected = withOutputSelection(input, FULL_SELECTION);
-  const output = await compileOrThrow(solc, selected, "source");
-  return extractLayout(selected, output, solc, contract);
+  return (await analyzeSource(input, solc, contract)).layout;
 }
 
-async function extractLayout(
+export type ProxyKind = ProxyDeployment["kind"];
+
+/**
+ * OpenZeppelin's safety error kinds, without the deprecated struct-definition
+ * and enum-definition, which the check never reports.
+ */
+export type SafetyErrorKind = Exclude<
+  ValidationError["kind"],
+  "struct-definition" | "enum-definition"
+>;
+
+export const SAFETY_ERROR_KINDS: readonly SafetyErrorKind[] = errorKinds.filter(
+  (k): k is SafetyErrorKind => k !== "struct-definition" && k !== "enum-definition",
+);
+
+export interface SafetyError {
+  /** OpenZeppelin's error kind, such as `constructor`. */
+  kind: SafetyErrorKind;
+  /** Where, as `file.sol:line`. */
+  src: string;
+}
+
+export interface SafetyOptions {
+  /**
+   * The proxy being upgraded; only `uups` requires an `upgradeToAndCall`.
+   * Required: the new contract's own `kind` would let a UUPS implementation
+   * that lost its upgrade function pass.
+   */
+  kind: ProxyKind;
+  /** Error kinds to accept anyway (OZ's `unsafeAllow`). Prefer NatSpec exceptions in the source. */
+  unsafeAllow?: SafetyErrorKind[];
+}
+
+export interface SafetyReport {
+  ok: boolean;
+  errors: SafetyError[];
+  /** OpenZeppelin's description of each error. */
+  explain(): string;
+}
+
+export interface SourceAnalysis {
+  layout: StorageLayout;
+  /** `uups` when the contract has `upgradeTo` or `upgradeToAndCall`, else `transparent`. */
+  kind: Exclude<ProxyKind, "beacon">;
+  /**
+   * OpenZeppelin's safety check (constructors, `selfdestruct`,
+   * `delegatecall`, initial values, immutables, initializers), honoring
+   * `@custom:oz-upgrades-unsafe-allow` in the source.
+   */
+  safety(options: SafetyOptions): SafetyReport;
+}
+
+/** `layoutFromSource` plus OpenZeppelin's safety check, from one compile. */
+export async function analyzeSource(
+  input: SolcInput,
+  solc: SolcRunner,
+  contract: string,
+): Promise<SourceAnalysis> {
+  const selected = withOutputSelection(input, FULL_SELECTION);
+  return analyze(selected, await compileOrThrow(solc, selected, "source"), solc, contract);
+}
+
+async function analyze(
   input: SolcInput,
   output: SolcOutput,
   solc: SolcRunner,
   contract: string,
-): Promise<StorageLayout> {
+): Promise<SourceAnalysis> {
+  const { data, version } = await validateContract(input, output, solc, contract);
+  return {
+    layout: getStorageLayout(data, version),
+    // Typed as any ProxyKind, but only ever uups or transparent.
+    kind: inferProxyKind(data, version) as SourceAnalysis["kind"],
+    safety({ kind, unsafeAllow = [] }) {
+      // A copy: OpenZeppelin appends to the array it is given.
+      const opts = { kind, unsafeAllow: [...unsafeAllow] };
+      // The deprecated kinds are never reported, so every error has a SafetyErrorKind.
+      const errors = getErrors(data, version, opts) as Array<ValidationError & SafetyError>;
+      return {
+        ok: errors.length === 0,
+        errors,
+        explain: () => new UpgradeableContractErrorReport(errors).explain(),
+      };
+    },
+  };
+}
+
+async function validateContract(
+  input: SolcInput,
+  output: SolcOutput,
+  solc: SolcRunner,
+  contract: string,
+): Promise<{ data: ValidationRunData; version: Version }> {
   const solcVersion = solc.longVersion.split("+")[0];
 
   let namespacedOutput: SolcOutput | undefined;
@@ -116,13 +208,14 @@ async function extractLayout(
   const version = runData[contract]?.version;
   if (version === undefined) {
     throw new LayoutIntegrityError(
-      `${contract} compiled to no bytecode; cannot derive its layout.`,
+      `${contract} compiled to no bytecode (an abstract contract or interface?); ` +
+        `cannot derive its layout.`,
     );
   }
   // OZ looks the contract up by bytecode version and takes the first match, so
   // two contracts with identical code (possible without a source hash) could
-  // swap layouts. Listing the target first makes the lookup land on it.
-  return getStorageLayout({ [contract]: runData[contract], ...runData }, version);
+  // swap layouts or safety errors. Listing the target first makes every lookup land on it.
+  return { data: { [contract]: runData[contract], ...runData }, version };
 }
 
 /**

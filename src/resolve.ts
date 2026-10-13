@@ -18,7 +18,7 @@ import {
 import { codeSha256, readChainId, readCode, readProxy, type EthProvider } from "./chain.js";
 import { LayoutUnavailableError } from "./errors.js";
 import { canQueryExplorer, fetchVerifiedSource, type ExplorerConfig } from "./explorer.js";
-import { reconstructLayout } from "./reconstruct.js";
+import { reconstructLayout, type ReconstructedLayout } from "./reconstruct.js";
 import { parseRecord, type LayoutRecord } from "./record.js";
 import { getSolc, type SolcOptions } from "./solc.js";
 
@@ -37,6 +37,20 @@ export async function resolveLayout(
   address: string,
   options: ResolveOptions,
 ): Promise<LayoutRecord> {
+  return (await rebuild(provider, address, options)).record;
+}
+
+/**
+ * `resolveLayout` plus the analysis of the verified source: the proxy kind,
+ * inferred from the code as OpenZeppelin recommends (not from the admin slot,
+ * which a UUPS proxy can have set), and the safety check.
+ * Internal, for the CLI.
+ */
+export async function rebuild(
+  provider: EthProvider,
+  address: string,
+  options: ResolveOptions,
+): Promise<{ record: LayoutRecord; analysis: ReconstructedLayout }> {
   const lower = address.toLowerCase();
   if (!canQueryExplorer(options.explorer)) {
     throw new LayoutUnavailableError(
@@ -49,7 +63,7 @@ export async function resolveLayout(
   const solc = await getSolc(source.solcLongVersion, options.solc);
   const rebuilt = await reconstructLayout(source, solc, code);
 
-  return {
+  const record: LayoutRecord = {
     format: 1,
     address: lower,
     chainId,
@@ -61,6 +75,7 @@ export async function resolveLayout(
     recordedAt: new Date().toISOString(),
     layout: rebuilt.layout,
   };
+  return { record, analysis: rebuilt };
 }
 
 export interface ProxyLayout {
