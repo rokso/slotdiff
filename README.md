@@ -3,13 +3,25 @@
 Storage layout diff for upgradeable Solidity contracts, where either side can be a local build or
 the code a proxy actually runs on chain.
 
-```ts
-const live = await resolveProxyLayout(provider, proxy, { explorer: { apiKey } });
-const report = diffLayouts(
-  live.record.layout,
-  await layoutFromSource(input, solc, "src/Vault.sol:Vault"),
-);
-if (!report.ok) console.log(report.explain());
+```sh
+npx slotdiff 0xProxy src/Vault.sol:Vault --rpc $RPC_URL   # what the proxy runs vs your build
+```
+
+For example, two local versions:
+
+```
+$ npx slotdiff src/Vault.sol:Vault src/VaultBad.sol:VaultBad
+old  src/Vault.sol:Vault
+     out/build-info/90f317b6c0a81633.json
+new  src/VaultBad.sol:VaultBad
+     out/build-info/90f317b6c0a81633.json
+
+✗ Storage layout   incompatible
+    src/VaultBad.sol:4: Inserted `inserted`
+      > New variables should be placed after all existing inherited variables
+✓ Safety rules     no problems found (transparent proxy)
+
+Not safe to upgrade: the storage layout is incompatible.
 ```
 
 ## Why
@@ -33,6 +45,60 @@ npm install slotdiff
 ```
 
 Node 22.12+. Works from ESM and CommonJS.
+
+## Command line
+
+```sh
+slotdiff <old> <new> [--rpc <url>]
+```
+
+Each side is a contract in your build info (`src/Vault.sol:Vault`, or just `Vault` when only one
+contract has that name) or an address: a proxy, read as the implementation it runs now, or an
+implementation, such as one waiting in a multisig queue. Any mix works. An address needs `--rpc`
+and `ETHERSCAN_API_KEY` (or `--explorer-url` for another explorer), since its source comes from
+the explorer. The RPC is a flag because it picks the chain for each run; the key lives in the
+environment because one Etherscan key covers every chain. It is sent only to Etherscan: with
+`--explorer-url`, put that explorer's own key in the URL's query if it needs one.
+
+A local side is read from the build info your tool already wrote; slotdiff does not compile your
+project. Build first, from the project root or with `--root`. Foundry writes build info only with
+`build_info = true` in `foundry.toml` or `forge build --build-info`. A build older than the
+sources on disk is refused, never used. `--build-info <file>` names one build-info file to use as
+is, such as a CI artifact from another checkout; the output then says it was not compared with the
+sources on disk.
+
+Two checks run:
+
+- **Storage layout**, by OpenZeppelin's rules, as above.
+- **Safety rules** for `<new>`, OpenZeppelin's checks that it can run behind a proxy: constructors, `selfdestruct`,
+  `delegatecall`, initial values, immutables and initializers (an initializer order problem is
+  only a warning, as in OpenZeppelin). Source exceptions (`@custom:oz-upgrades-unsafe-allow`) are
+  honored, and `--unsafe-allow <kinds>` accepts more. For an address, the verified source is
+  checked. `--no-safety` skips it.
+
+The proxy kind comes from `<old>`'s implementation: UUPS when it has `upgradeTo` or
+`upgradeToAndCall`, beacon for a beacon proxy, transparent otherwise. So a UUPS implementation that
+lost its upgrade function, which would leave the proxy unable to upgrade again, is caught:
+
+```
+$ npx slotdiff src/UupsV1.sol:UupsV1 src/UupsV2Lost.sol:UupsV2Lost
+old  src/UupsV1.sol:UupsV1
+     out/build-info/fb5d5362dc531baa.json
+new  src/UupsV2Lost.sol:UupsV2Lost
+     out/build-info/fb5d5362dc531baa.json
+
+✓ Storage layout   compatible
+✗ Safety rules     problems found (uups proxy)
+    src/UupsV2Lost.sol:3: Implementation is missing a public `upgradeTo(address)` or `upgradeToAndCall(address,bytes)` function
+        Inherit UUPSUpgradeable to include one or both of these functions in your contract
+        @openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol
+        https://zpl.in/upgrades/error-008
+
+Not safe to upgrade: <new> breaks the safety rules.
+```
+
+Exit codes: `0` every check ran and passed (or was skipped with `--no-safety`), `1` a check
+failed, `2` something could not be checked (never reported as compatible). `slotdiff --help` lists every option.
 
 ## Usage
 
@@ -90,6 +156,31 @@ src/Vault.sol:7: Inserted `inserted`
 
 The explorer defaults to Etherscan's v2 API, where one key covers every chain it indexes. For another
 Etherscan-compatible explorer, such as Blockscout, pass `{ apiUrl }` (a key is optional there).
+
+### Safety rules too
+
+`analyzeSource` is `layoutFromSource` plus OpenZeppelin's safety check, from one compile, as the
+command line runs it. Pass the kind of the proxy being upgraded, not the new contract's
+own: a UUPS implementation that lost its upgrade function would otherwise look transparent and
+pass.
+
+```ts
+import { analyzeSource, diffLayouts, findBuildInfo, getSolc } from "slotdiff";
+
+async function analyze(contract: string) {
+  const build = await findBuildInfo(process.cwd(), contract);
+  return analyzeSource(build.input, await getSolc(build.solcVersion), build.contract);
+}
+const old = await analyze("src/Vault.sol:Vault");
+const next = await analyze("src/VaultV2.sol:VaultV2");
+
+const layout = diffLayouts(old.layout, next.layout);
+const safety = next.safety({ kind: old.kind }); // the kind of the proxy being upgraded
+if (!layout.ok || !safety.ok) console.error(layout.explain(), safety.explain());
+```
+
+`safety` also takes `unsafeAllow` (error kinds to accept, listed in `SAFETY_ERROR_KINDS`), on top
+of `@custom:oz-upgrades-unsafe-allow` in the source.
 
 ### Keep records, skip the rebuild next time
 
@@ -192,6 +283,7 @@ newer slotdiff.
 | `verifyRecord(provider, address, value)`                     | Load a saved record, checked against the chain                           |
 | `parseRecord(value, address?)`                               | Load a saved record, checked offline                                     |
 | `layoutFromSource(input, solc, "file.sol:Name")`             | Layout from standard-json input, including ERC-7201 namespaces. No proof |
+| `analyzeSource(input, solc, "file.sol:Name")`                | The layout, the inferred proxy `kind`, and `safety({ kind })`            |
 | `findBuildInfo(root, contract, { file? })`                   | Your build info for a contract: input, compiler version, deployed code   |
 | `getSolc(version)`                                           | Native solc, from a cache or downloaded and checksum-verified            |
 | `readProxy`, `readImplementation`, `readCode`, `readChainId` | Chain reads                                                              |
@@ -216,7 +308,6 @@ Renames and retypes follow OpenZeppelin's NatSpec tags, `@custom:oz-renamed-from
   OpenZeppelin does. The `bytes32` slot constant your code actually uses is not checked against
   it, so moving the constant while leaving the annotation unchanged is not detected. Keep the two in
   sync, for example by deriving the constant with the ERC-7201 formula in a test.
-- Library only for now. A CLI is planned.
 
 ## License
 
