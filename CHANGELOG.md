@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Explorer errors no longer repeat fetch's error text, which can quote the request URL and with
+  it the API key.
+
 ## 0.1.0-alpha.1
 
 First release.

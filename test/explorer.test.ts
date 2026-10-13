@@ -243,4 +243,14 @@ describe("explorer edge cases", () => {
       solcLongVersion: nightly.slice(1),
     });
   });
+
+  it("never quotes the URL, which carries the key, when fetch fails", async () => {
+    // Node's fetch quotes the whole URL when refusing one with credentials.
+    const failing = fetchVerifiedSource(1, "0x00000000000000000000000000000000000000bb", {
+      apiUrl: "https://user:pass@explorer.test/api",
+      apiKey: "SECRET",
+    });
+    await expect(failing).rejects.toThrow(LayoutUnavailableError);
+    await expect(failing).rejects.not.toThrow(/SECRET/);
+  });
 });
