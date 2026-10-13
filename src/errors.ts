@@ -22,3 +22,12 @@ export class LayoutIntegrityError extends Error {
     this.name = "LayoutIntegrityError";
   }
 }
+
+/**
+ * A network error's code (ECONNREFUSED, ENOTFOUND), never its message: fetch
+ * quotes the URL in some messages, and URLs carry API keys.
+ */
+export function errorCode(e: unknown): string {
+  const code = (e as { cause?: { code?: unknown } }).cause?.code;
+  return typeof code === "string" ? code : "network error";
+}

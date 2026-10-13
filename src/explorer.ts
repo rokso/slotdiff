@@ -8,7 +8,7 @@
  */
 
 import type { SolcInput } from "@openzeppelin/upgrades-core";
-import { LayoutUnavailableError } from "./errors.js";
+import { errorCode, LayoutUnavailableError } from "./errors.js";
 
 export const ETHERSCAN_V2_API_URL = "https://api.etherscan.io/v2/api";
 
@@ -87,7 +87,7 @@ async function requestWithRetry(url: string, fetchImpl: FetchLike): Promise<Sour
       res = await fetchImpl(url);
     } catch (e) {
       // Messages never include the URL, which carries the API key.
-      throw new LayoutUnavailableError(`Explorer unreachable: ${(e as Error).message}`);
+      throw new LayoutUnavailableError(`Explorer unreachable (${errorCode(e)}).`);
     }
 
     if (res.status === 429 && retry) {
