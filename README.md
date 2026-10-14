@@ -1,5 +1,7 @@
 # slotdiff
 
+[![npm](https://img.shields.io/npm/v/slotdiff)](https://www.npmjs.com/package/slotdiff) [![CI](https://github.com/rokso/slotdiff/actions/workflows/ci.yml/badge.svg)](https://github.com/rokso/slotdiff/actions/workflows/ci.yml) [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/rokso/slotdiff/badge)](https://scorecard.dev/viewer/?uri=github.com/rokso/slotdiff) [![License: MIT](https://img.shields.io/npm/l/slotdiff)](LICENSE)
+
 Storage layout diff for upgradeable Solidity contracts, where either side can be a local build or
 the code a proxy actually runs on chain.
 
@@ -361,6 +363,12 @@ Renames and retypes follow OpenZeppelin's NatSpec tags, `@custom:oz-renamed-from
   literal, the ERC-7201 formula, or `erc7201("id")`), directly or through a local variable set
   once or a function with no arguments that returns one. Any other slot (computed at run time, a
   library's constant) is not read, and the upgrade is reported as not checked.
+
+## No guarantee
+
+slotdiff is provided as is, without warranty of any kind (see [LICENSE](LICENSE)). It checks what its rules and OpenZeppelin's can check. "Safe to upgrade" means those checks found no problem, not that the upgrade is safe in every way. It does not replace review, a test upgrade on a fork, or an audit. The authors accept no liability for any loss, including lost or locked funds, arising from using slotdiff or relying on its results.
+
+To report a security problem, or to see what slotdiff touches on your machine (network, processes, files, environment), read [SECURITY.md](SECURITY.md).
 
 ## License
 

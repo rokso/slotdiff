@@ -56,7 +56,10 @@ chain), or use --explorer-url, with that explorer's key in its query if it needs
 (ETHERSCAN_API_KEY is sent only to Etherscan). --rpc picks the chain for each run.
 
 Exit codes: 0 every check passed (or was skipped with --no-safety), 1 a check
-failed, 2 something could not be checked.`;
+failed, 2 something could not be checked.
+
+A pass means these checks found no problem, not that an upgrade is safe in every
+way. No warranty; see LICENSE.`;
 
 const HELP_HINT = "Run slotdiff --help for usage.";
 
