@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } 
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
+import { stripVTControlCharacters } from "node:util";
 import type { SolcInput } from "@openzeppelin/upgrades-core";
 import { calculateERC7201StorageLocation as slotOf } from "@openzeppelin/upgrades-core/dist/utils/erc7201.js";
 import { run } from "../src/cli.js";
@@ -183,6 +184,7 @@ async function cli(
   args: string[],
   fetchImpl: ReturnType<typeof vi.fn> = rpcFetch(),
   env: Record<string, string> = { ETHERSCAN_API_KEY: "KEY" },
+  terminal: { tty?: boolean; color?: boolean } = {},
 ) {
   const stdout: string[] = [];
   const stderr: string[] = [];
@@ -192,6 +194,7 @@ async function cli(
     cwd: root,
     env,
     fetch: fetchImpl as never,
+    ...terminal,
   });
   return { code, stdout: stdout.join("\n"), stderr: stderr.join("\n") };
 }
@@ -606,6 +609,45 @@ describe("slotdiff CLI", () => {
       expect(r.stderr).toMatch(/^[^\n]+\. Run slotdiff --help for usage\.$/);
     },
   );
+
+  describe("on a terminal", () => {
+    const BANNER_LINE = "|___/_|\\___/ \\__\\__,_|_|_| |_|";
+
+    it("colors the report without moving a column", async () => {
+      const args = ["NewShut", "NewMoved"];
+      const plainRun = await cli(args);
+      const colored = await cli(args, undefined, undefined, { color: true });
+      // A red ✗ on the failing check and a red verdict; plain text is what is aligned.
+      expect(colored.stdout).toContain("\x1b[31m✗\x1b[39m \x1b[1mERC-7201 slots\x1b[22m");
+      expect(colored.stdout).toContain("\x1b[31mNot safe to upgrade:");
+      expect(stripVTControlCharacters(colored.stdout)).toBe(plainRun.stdout);
+      expect(colored.code).toBe(plainRun.code);
+    }, 60_000);
+
+    it("shows the banner only on a terminal, and never colors without color", async () => {
+      const shown = await cli(["V1", "V2"], undefined, undefined, { tty: true });
+      expect(shown.stdout.split("\n")[4]).toBe(BANNER_LINE);
+      expect(shown.stdout).toContain(" storage layout diff for upgradeable contracts · ");
+      expect(shown.stdout).not.toContain("\x1b[");
+      expect((await cli(["V1", "V2"])).stdout).not.toContain(BANNER_LINE);
+    }, 60_000);
+
+    it('draws "slot" and "diff" in two colors, the same letters as without color', async () => {
+      const banner = (color: boolean) =>
+        cli(["--version"], undefined, undefined, { tty: true, color }).then((r) => r.stdout);
+      const colored = await banner(true);
+      const [slot, diff] = [String.raw`|___/_|\___/ \__`, String.raw`\__,_|_|_| |_|`];
+      expect(colored).toContain(`\x1b[94m${slot}\x1b[39m\x1b[35m${diff}\x1b[39m`);
+      expect(stripVTControlCharacters(colored)).toBe(await banner(false));
+    });
+
+    it("puts the banner on --help and --version, but a bare version in a pipe", async () => {
+      const tty = { tty: true };
+      expect((await cli(["--help"], undefined, undefined, tty)).stdout).toContain(BANNER_LINE);
+      expect((await cli(["--version"], undefined, undefined, tty)).stdout).toContain(BANNER_LINE);
+      expect((await cli(["--version"])).stdout).toMatch(/^\d+\.\d+\.\d+(-[\w.]+)?$/);
+    });
+  });
 
   it("prints help and the version", async () => {
     expect((await cli(["--help"])).stdout).toContain("Usage: slotdiff");

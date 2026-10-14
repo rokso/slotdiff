@@ -10,12 +10,12 @@
 
 import { readFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
-import { parseArgs } from "node:util";
+import { parseArgs, styleText } from "node:util";
 import { findBuildInfo } from "./build-info.js";
 import { readCode, readProxy, type EthProvider } from "./chain.js";
 import { diffLayouts } from "./diff.js";
 import { checkNamespaces } from "./erc7201.js";
-import { checkLines, namespaceLines, type Check } from "./report.js";
+import { checkLines, namespaceLines, plain, type Check, type Paint } from "./report.js";
 import { errorCode, LayoutUnavailableError } from "./errors.js";
 import { canQueryExplorer } from "./explorer.js";
 import { rebuild } from "./resolve.js";
@@ -60,6 +60,15 @@ failed, 2 something could not be checked.`;
 
 const HELP_HINT = "Run slotdiff --help for usage.";
 
+// "slot" and "diff" in block letters, split where the two words meet.
+const BANNER: Array<[string, string]> = [
+  ["     _       _  ", "    _ _  __  __"],
+  [" ___| | ___ | |_", " __| (_)/ _|/ _|"],
+  ["/ __| |/ _ \\| __", "/ _` | | |_| |_"],
+  ["\\__ \\ | (_) | |", "| (_| | |  _|  _|"],
+  ["|___/_|\\___/ \\__", "\\__,_|_|_| |_|"],
+];
+
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 
 type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
@@ -70,6 +79,10 @@ export interface CliIo {
   cwd?: string;
   env?: Record<string, string | undefined>;
   fetch?: FetchLike;
+  /** stdout is an interactive terminal: show the banner. */
+  tty?: boolean;
+  /** stdout takes colors (Node's rules: a terminal, `NO_COLOR`, `FORCE_COLOR`). */
+  color?: boolean;
 }
 
 interface Side {
@@ -108,12 +121,21 @@ export async function run(argv: string[], io: CliIo): Promise<number> {
     return 2;
   }
   const { values, positionals } = parsed;
+  const paint: Paint = io.color
+    ? (format, text) => styleText(format, text, { validateStream: false })
+    : plain;
+  // Only for a person at a terminal: never in a pipe, a log or CI.
+  const banner = async () =>
+    [
+      ...BANNER.map(([slot, diff]) => paint("blueBright", slot) + paint("magenta", diff)),
+      ` ${paint("dim", `storage layout diff for upgradeable contracts · ${await packageVersion()}`)}`,
+    ].join("\n");
   if (values.help) {
-    io.stdout(USAGE);
+    io.stdout(io.tty ? `${await banner()}\n\n${USAGE}` : USAGE);
     return 0;
   }
   if (values.version) {
-    io.stdout(await packageVersion());
+    io.stdout(io.tty ? await banner() : await packageVersion());
     return 0;
   }
   if (positionals.length !== 2) {
@@ -179,6 +201,8 @@ export async function run(argv: string[], io: CliIo): Promise<number> {
       : { apiKey: env.ETHERSCAN_API_KEY };
   const provider = rpcUrl !== undefined ? jsonRpcProvider(rpcUrl, io.fetch ?? fetch) : undefined;
 
+  if (io.tty) io.stdout(`${await banner()}\n`);
+
   const readSide = async (spec: string): Promise<Side> => {
     if (ADDRESS.test(spec)) {
       // A proxy stands for what it runs now; any other address is an implementation.
@@ -233,13 +257,15 @@ export async function run(argv: string[], io: CliIo): Promise<number> {
     ["old", old],
     ["new", next],
   ] as const) {
-    io.stdout(`${label}  ${side.description[0]}\n     ${side.description[1]}`);
+    io.stdout(
+      `${paint("bold", label)}  ${side.description[0]}\n     ${paint("dim", side.description[1])}`,
+    );
   }
 
   // OpenZeppelin matches namespaces by annotation; slotdiff pairs them by the
   // slot the code uses, and OpenZeppelin then compares the structs of each pair.
   const namespaces = checkNamespaces(old.analysis, next.analysis);
-  const grid = namespaceLines(namespaces.pairs);
+  const grid = namespaceLines(namespaces.pairs, paint);
   if (grid.length > 0) io.stdout(`\n${grid.join("\n")}`);
 
   const report = diffLayouts(namespaces.layout, next.analysis.layout, {
@@ -290,7 +316,7 @@ export async function run(argv: string[], io: CliIo): Promise<number> {
             details: safetyCheck.explain(),
           },
   );
-  io.stdout(`\n${checkLines(checks).join("\n")}`);
+  io.stdout(`\n${checkLines(checks, paint).join("\n")}`);
 
   // One verdict, so a passing check next to a failing one is never read as safe.
   const problems = [
@@ -299,17 +325,19 @@ export async function run(argv: string[], io: CliIo): Promise<number> {
     ...(safetyCheck?.ok === false ? ["<new> breaks the safety rules"] : []),
   ];
   if (problems.length > 0) {
-    io.stdout(`\nNot safe to upgrade: ${problems.join(" and ")}.`);
+    io.stdout(`\n${paint(["bold", "red"], "Not safe to upgrade:")} ${problems.join(" and ")}.`);
     return 1;
   }
   if (namespaces.result === "unread") {
-    io.stdout("\nCould not check: some ERC-7201 slots could not be read.");
+    io.stdout(
+      `\n${paint(["bold", "yellow"], "Could not check:")} some ERC-7201 slots could not be read.`,
+    );
     return 2;
   }
   io.stdout(
     safetyCheck === undefined
-      ? "\nStorage layout compatible; safety rules not checked (--no-safety)."
-      : "\nSafe to upgrade.",
+      ? `\n${paint("yellow", "Storage layout compatible; safety rules not checked (--no-safety).")}`
+      : `\n${paint(["bold", "green"], "Safe to upgrade.")}`,
   );
   return 0;
 }
