@@ -4,13 +4,16 @@
 
 - CLI: `slotdiff <old> <new>`, where each side is a contract in your build info or an address (a
   proxy, read as what it runs now, or an implementation; needs `--rpc` and `ETHERSCAN_API_KEY`).
-  Checks the storage layout and OpenZeppelin's safety rules for `<new>`, with the proxy kind taken
-  from `<old>`'s implementation, so a UUPS implementation missing `upgradeToAndCall` fails. Exits
-  0 when every check passed, 1 when one failed, 2 when something could not be checked.
-  `ETHERSCAN_API_KEY` is sent only to Etherscan, never to `--explorer-url`.
+  Checks the storage layout, the ERC-7201 slots and OpenZeppelin's safety rules for `<new>`, with
+  the proxy kind taken from `<old>`'s implementation, so a UUPS implementation missing
+  `upgradeToAndCall` fails. Exits 0 when every check passed, 1 when one failed, 2 when something
+  could not be checked. `ETHERSCAN_API_KEY` is sent only to Etherscan, never to `--explorer-url`.
 - `findBuildInfo`: reads Foundry, Hardhat 2 and Hardhat 3 build info. The build is chosen by
   content: only one whose target and imports still match the files on disk, so the stale files
   Foundry keeps after each edit are never used. Its `input` holds only what the target imports.
+- ERC-7201 namespaces are compared by the slot the code really uses, not only the annotation: a
+  namespace whose slot moves fails, whatever the annotations say, and a corrected annotation over
+  an unchanged slot passes (`SourceAnalysis.namespaces`, `checkNamespaces`).
 - `analyzeSource`: `layoutFromSource` plus OpenZeppelin's safety check from one compile,
   as the CLI runs it; `safety({ kind })` takes the proxy kind being upgraded.
 - Explorer errors no longer repeat fetch's error text, which can quote the request URL and with

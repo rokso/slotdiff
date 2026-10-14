@@ -14,7 +14,8 @@ import { parseArgs } from "node:util";
 import { findBuildInfo } from "./build-info.js";
 import { readCode, readProxy, type EthProvider } from "./chain.js";
 import { diffLayouts } from "./diff.js";
-import { checkLines, type Check } from "./report.js";
+import { checkNamespaces } from "./erc7201.js";
+import { checkLines, namespaceLines, type Check } from "./report.js";
 import { errorCode, LayoutUnavailableError } from "./errors.js";
 import { canQueryExplorer } from "./explorer.js";
 import { rebuild } from "./resolve.js";
@@ -30,7 +31,8 @@ import { getSolc } from "./solc.js";
 const USAGE = `Usage: slotdiff <old> <new> [options]
 
 Checks that <new> can replace <old> behind a proxy: OpenZeppelin's storage layout
-rules, and its safety rules for <new> (constructors, initializers, selfdestruct...).
+rules, that each ERC-7201 namespace stays in the slot the code really uses, and
+OpenZeppelin's safety rules for <new> (constructors, initializers, selfdestruct...).
 Each side is either:
   a contract in this project's build info   src/Vault.sol:Vault, or Vault when unique
   an address                                a proxy (the implementation it runs now),
@@ -234,7 +236,13 @@ export async function run(argv: string[], io: CliIo): Promise<number> {
     io.stdout(`${label}  ${side.description[0]}\n     ${side.description[1]}`);
   }
 
-  const report = diffLayouts(old.analysis.layout, next.analysis.layout, {
+  // OpenZeppelin matches namespaces by annotation; slotdiff pairs them by the
+  // slot the code uses, and OpenZeppelin then compares the structs of each pair.
+  const namespaces = checkNamespaces(old.analysis, next.analysis);
+  const grid = namespaceLines(namespaces.pairs);
+  if (grid.length > 0) io.stdout(`\n${grid.join("\n")}`);
+
+  const report = diffLayouts(namespaces.layout, next.analysis.layout, {
     unsafeAllowRenames: values["unsafe-allow-renames"],
   });
   const renames = values["unsafe-allow-renames"] ? " (renames accepted)" : "";
@@ -248,6 +256,19 @@ export async function run(argv: string[], io: CliIo): Promise<number> {
           details: report.explain(),
         },
   ];
+
+  if (namespaces.pairs.length > 0) {
+    checks.push({
+      name: "ERC-7201 slots",
+      ...(namespaces.result === "fail"
+        ? { status: "fail", summary: "problems found in <new> (see above)" }
+        : namespaces.result === "unread"
+          ? { status: "skip", summary: "not checked: some slots could not be read (see above)" }
+          : grid.length > 0
+            ? { status: "pass", summary: "compared by the slot in code (see above)" }
+            : { status: "pass", summary: "match their annotations" }),
+    });
+  }
 
   // The kind comes from <old>, the proxy being upgraded: inferring it from <new>
   // would miss a UUPS implementation that lost its upgrade function.
@@ -274,11 +295,16 @@ export async function run(argv: string[], io: CliIo): Promise<number> {
   // One verdict, so a passing check next to a failing one is never read as safe.
   const problems = [
     ...(report.ok ? [] : ["the storage layout is incompatible"]),
+    ...(namespaces.result === "fail" ? ["an ERC-7201 namespace fails the slot check"] : []),
     ...(safetyCheck?.ok === false ? ["<new> breaks the safety rules"] : []),
   ];
   if (problems.length > 0) {
     io.stdout(`\nNot safe to upgrade: ${problems.join(" and ")}.`);
     return 1;
+  }
+  if (namespaces.result === "unread") {
+    io.stdout("\nCould not check: some ERC-7201 slots could not be read.");
+    return 2;
   }
   io.stdout(
     safetyCheck === undefined

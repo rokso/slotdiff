@@ -8,6 +8,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import type { SolcInput } from "@openzeppelin/upgrades-core";
+import { calculateERC7201StorageLocation as slotOf } from "@openzeppelin/upgrades-core/dist/utils/erc7201.js";
 import { run } from "../src/cli.js";
 import { getSolc, type SolcRunner } from "../src/solc.js";
 import { makeMockChain } from "./helpers/mock-chain.js";
@@ -22,6 +23,18 @@ const RPC = "http://rpc.test/secret-key";
 
 const header = "// SPDX-License-Identifier: MIT\npragma solidity 0.8.24;\n";
 const UPGRADE = "function upgradeToAndCall(address, bytes calldata) external payable {}";
+const bump = (slot: string) => "0x" + (BigInt(slot) + 1n).toString(16).padStart(64, "0");
+
+// A contract with one ERC-7201 namespace annotated `id`, stored at `slot`.
+function namespaced(name: string, id: string, slot: string, fields = "uint256 shutdown;"): string {
+  return `${header}contract ${name} {
+    /// @custom:storage-location erc7201:${id}
+    struct S { ${fields} }
+    bytes32 private constant LOCATION = ${slot};
+    function _s() private pure returns (S storage $) { assembly { $.slot := LOCATION } }
+    function shutdown() external view returns (uint256) { return _s().shutdown; }
+}\n`;
+}
 const SOURCES: Record<string, string> = {
   "src/V1.sol": `${header}contract V1 { uint256 public a; address public owner; }\n`,
   "src/V2.sol": `${header}contract V2 { uint256 public a; address public owner; uint256 public added; }\n`,
@@ -32,6 +45,27 @@ const SOURCES: Record<string, string> = {
   "src/Lost.sol": `${header}contract Lost { uint256 public a; address public owner; }\n`,
   "src/Ctor.sol": `${header}contract Ctor { uint256 public a; address public owner; constructor() { a = 1; } }\n`,
   "src/BadCtor.sol": `${header}contract BadCtor { uint256 public inserted; uint256 public a; address public owner; constructor() { a = 1; } }\n`,
+  // The annotation was wrong in the deployed version and fixed later; the slot never moved.
+  "src/OldShut.sol": namespaced("OldShut", "x.shutdown", slotOf("x.shutdown.real")),
+  "src/NewShut.sol": namespaced("NewShut", "x.shutdown.real", slotOf("x.shutdown.real")),
+  // The slot moved behind an unchanged annotation.
+  "src/NewMoved.sol": namespaced("NewMoved", "x.shutdown.real", slotOf("x.elsewhere")),
+  // The annotation corrected to where the old data is, but the slot then moved by one.
+  "src/NewOff.sol": namespaced("NewOff", "x.shutdown.real", bump(slotOf("x.shutdown.real"))),
+  "src/NewOffInsert.sol": namespaced(
+    "NewOffInsert",
+    "x.shutdown.real",
+    bump(slotOf("x.shutdown.real")),
+    "uint256 inserted; uint256 shutdown;",
+  ),
+  // OldShut's constant changed to match its wrong annotation: the data is left behind.
+  "src/FixedConst.sol": namespaced("FixedConst", "x.shutdown", slotOf("x.shutdown")),
+  // A slot slotdiff cannot read.
+  "src/Unread.sol": namespaced("Unread", "x.shutdown.real", slotOf("x.shutdown.real")).replace(
+    "assembly { $.slot := LOCATION }",
+    'bytes32 l = keccak256("x"); assembly { $.slot := l }',
+  ),
+  "src/NoNs.sol": `${header}contract NoNs { uint256 private x; }\n`,
   "src/CtorAllowed.sol": `${header}contract CtorAllowed { uint256 public a; address public owner;
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() { a = 1; } }\n`,
@@ -49,6 +83,7 @@ let solc: SolcRunner;
 let root: string;
 let v1Code: string;
 let uupsCode: string;
+let oldShutCode: string;
 
 async function deployedCode(path: string, name: string): Promise<string> {
   const out = await solc.compile({
@@ -87,6 +122,7 @@ beforeAll(async () => {
   solc = await getSolc(SOLC);
   v1Code = await deployedCode("src/V1.sol", "V1");
   uupsCode = await deployedCode("src/Uups.sol", "Uups");
+  oldShutCode = await deployedCode("src/OldShut.sol", "OldShut");
 
   // A Hardhat 2 shaped project: the reader only needs input, version and output contract names.
   root = await mkdtemp(join(tmpdir(), "slotdiff-cli-"));
@@ -254,6 +290,109 @@ describe("slotdiff CLI", () => {
       /\nNot safe to upgrade: the storage layout is incompatible and <new> breaks the safety rules.$/,
     );
   }, 60_000);
+
+  describe("ERC-7201 slots", () => {
+    const short = (slot: string) => `${slot.slice(0, 6)}…${slot.slice(-4)}`;
+
+    it("matches namespaces by the slot the code uses, not the annotation", async () => {
+      const r = await cli(["OldShut", "NewShut"]);
+      const lines = r.stdout.split("\n");
+      const at = lines.indexOf("ERC-7201 namespaces");
+      expect(lines.slice(at, at + 5)).toEqual([
+        "ERC-7201 namespaces",
+        "       annotation        slot from annotation   slot in code",
+        `  old  x.shutdown        ${short(slotOf("x.shutdown"))}            ${short(slotOf("x.shutdown.real"))}    ✗ annotation does not match code`,
+        `  new  x.shutdown.real   ${short(slotOf("x.shutdown.real"))}            ${short(slotOf("x.shutdown.real"))}    ✓`,
+        "       Same slot in code on both sides: the storage did not move. Compared as one namespace.",
+      ]);
+      expect(r.stdout).toContain("✓ ERC-7201 slots   compared by the slot in code (see above)");
+      expect(r.stdout).toContain("✓ Storage layout   compatible");
+      expect(r.code).toBe(0);
+    }, 60_000);
+
+    it("does the same when <old> is what a proxy runs", async () => {
+      serveVerified("src/OldShut.sol", "OldShut");
+      const chain = makeMockChain({
+        code: { [IMPL]: oldShutCode },
+        implementations: { [PROXY]: IMPL },
+      });
+      const r = await cli([PROXY, "NewShut", "--rpc", RPC], rpcFetch(chain));
+      expect(r.stderr).toBe("");
+      expect(r.stdout).toContain("Same slot in code on both sides");
+      expect(r.code).toBe(0);
+    }, 60_000);
+
+    it("fails a slot that moved behind an unchanged annotation", async () => {
+      const r = await cli(["NewShut", "NewMoved"]);
+      expect(r.stdout).toContain(
+        `  new  x.shutdown.real   ${short(slotOf("x.shutdown.real"))}            ${short(slotOf("x.elsewhere"))}    ✗ annotation does not match code`,
+      );
+      expect(r.stdout).toContain(
+        `The new code moves this namespace from ${short(slotOf("x.shutdown.real"))} to ${short(slotOf("x.elsewhere"))}`,
+      );
+      expect(r.stdout).toContain("✗ ERC-7201 slots   problems found in <new> (see above)");
+      expect(r.stdout).toMatch(
+        /\nNot safe to upgrade: an ERC-7201 namespace fails the slot check.$/,
+      );
+      expect(r.code).toBe(1);
+    }, 60_000);
+
+    // Where the slot check owns the namespace, OpenZeppelin judges only the struct.
+    it("reports a moved slot once, as a slot problem, not a deleted namespace", async () => {
+      const r = await cli(["OldShut", "NewOff"]);
+      expect(r.stdout).toContain("The new code moves this namespace from");
+      expect(r.stdout).toContain("✓ Storage layout   compatible");
+      expect(r.stdout).not.toContain("Deleted namespace");
+      expect(r.code).toBe(1);
+    }, 60_000);
+
+    it("still lets OpenZeppelin catch a change inside a moved namespace", async () => {
+      const r = await cli(["OldShut", "NewOffInsert"]);
+      expect(r.stdout).toContain("✗ Storage layout   incompatible");
+      expect(r.stdout).toMatch(/Inserted `inserted`/);
+      expect(r.code).toBe(1);
+    }, 60_000);
+
+    it("fails a constant changed to match an annotation the deployed code did not follow", async () => {
+      const r = await cli(["OldShut", "FixedConst"]);
+      expect(r.stdout).toContain(
+        `The new code moves this namespace from ${short(slotOf("x.shutdown.real"))} to ${short(slotOf("x.shutdown"))}`,
+      );
+      expect(r.stdout).toMatch(
+        /\nNot safe to upgrade: an ERC-7201 namespace fails the slot check.$/,
+      );
+      expect(r.code).toBe(1);
+    }, 60_000);
+
+    it("exits 2 when a slot cannot be read, never reporting it safe", async () => {
+      const r = await cli(["NewShut", "Unread"]);
+      expect(r.stdout).toContain("? slot in code not read");
+      expect(r.stdout).toContain(
+        "- ERC-7201 slots   not checked: some slots could not be read (see above)",
+      );
+      expect(r.stdout).toMatch(/\nCould not check: some ERC-7201 slots could not be read.$/);
+      expect(r.code).toBe(2);
+    }, 60_000);
+
+    it("leaves a namespace that is really gone to OpenZeppelin", async () => {
+      const r = await cli(["NewShut", "NoNs"]);
+      expect(r.stdout).toContain("Deleted namespace `erc7201:x.shutdown.real`");
+      expect(r.stdout).not.toContain("ERC-7201 namespaces");
+      expect(r.code).toBe(1);
+    }, 60_000);
+
+    it("shows no grid when every slot matches", async () => {
+      const r = await cli(["NewShut", "NewShut"]);
+      expect(r.stdout).not.toContain("ERC-7201 namespaces");
+      expect(r.stdout).toContain("✓ ERC-7201 slots   match their annotations");
+      expect(r.code).toBe(0);
+    }, 60_000);
+
+    it("leaves the ERC-7201 check out for a contract with no namespaces", async () => {
+      const r = await cli(["V1", "V2"]);
+      expect(r.stdout).not.toContain("ERC-7201");
+    }, 60_000);
+  });
 
   describe("safety rules", () => {
     it("is skipped with --no-safety", async () => {
