@@ -44,7 +44,7 @@ Hardhat 2 and 3, or a plain script.
 npm install slotdiff
 ```
 
-Node 22.12+. Works from ESM and CommonJS.
+Node 22.13+. Works from ESM and CommonJS.
 
 ## Command line
 
@@ -144,6 +144,9 @@ Not safe to upgrade: <new> breaks the safety rules.
 
 Exit codes: `0` every check ran and passed (or was skipped with `--no-safety`), `1` a check
 failed, `2` something could not be checked (never reported as compatible). `slotdiff --help` lists every option.
+
+Colors and the banner appear only on an interactive terminal, never in a pipe, a log or CI.
+`NO_COLOR` turns colors off; `FORCE_COLOR` turns them on, for CI logs that render them.
 
 ## Usage
 

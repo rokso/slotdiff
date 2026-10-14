@@ -18,6 +18,8 @@
   as the CLI runs it; `safety({ kind })` takes the proxy kind being upgraded.
 - Explorer errors no longer repeat fetch's error text, which can quote the request URL and with
   it the API key.
+- CLI colors and a banner on an interactive terminal only; `NO_COLOR` and `FORCE_COLOR` are
+  honored. Built on Node's `util.styleText`, so no new dependency: Node 22.13+ (was 22.12+).
 
 ## 0.1.0-alpha.1
 

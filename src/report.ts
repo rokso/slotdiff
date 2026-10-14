@@ -1,9 +1,18 @@
 /**
- * The CLI's plain-text report: the ERC-7201 namespace grid and the check list.
- * Pure functions from results to lines, so the layout is tested as text.
+ * The CLI's report: the ERC-7201 namespace grid and the check list. Pure
+ * functions from results to lines, so the layout is tested as text. Colors
+ * come from `paint`, applied after alignment so they never shift a column.
  */
 
 import type { NamespacePair, NamespaceSlot } from "./erc7201.js";
+
+/** Node's `util.styleText`, or `plain` when colors are off. */
+export type Paint = (
+  format: Parameters<typeof import("node:util").styleText>[0],
+  text: string,
+) => string;
+
+export const plain: Paint = (_, text) => text;
 
 export type CheckStatus = "pass" | "fail" | "skip";
 
@@ -16,12 +25,13 @@ export interface Check {
 }
 
 const MARK: Record<CheckStatus, string> = { pass: "✓", fail: "✗", skip: "-" };
+const TONE = { pass: "green", fail: "red", skip: "yellow" } as const;
 
 /** One line per check, names aligned, details indented under their check. */
-export function checkLines(checks: Check[]): string[] {
+export function checkLines(checks: Check[], paint: Paint = plain): string[] {
   const width = Math.max(...checks.map((c) => c.name.length));
   return checks.flatMap((c) => [
-    `${MARK[c.status]} ${c.name.padEnd(width)}   ${c.summary}`,
+    `${paint(TONE[c.status], MARK[c.status])} ${paint("bold", c.name.padEnd(width))}   ${c.summary}`,
     ...(c.details?.split("\n").map((line) => `    ${line}`) ?? []),
   ]);
 }
@@ -31,7 +41,7 @@ export function checkLines(checks: Check[]): string[] {
  * annotation, the slot it implies and the slot the code uses, for old and new,
  * with a sentence saying what that means. Namespaces that line up are left out.
  */
-export function namespaceLines(pairs: NamespacePair[]): string[] {
+export function namespaceLines(pairs: NamespacePair[], paint: Paint = plain): string[] {
   const blocks = pairs
     // A side that is absent is not a problem here; OpenZeppelin reports a deleted namespace.
     .filter(
@@ -47,6 +57,11 @@ export function namespaceLines(pairs: NamespacePair[]): string[] {
           ...(p.next !== undefined ? [row("new", p.next, fmt)] : []),
         ],
         meaning: meaning(p, fmt),
+        tone: (p.problem === undefined
+          ? "dim"
+          : p.problem === "unread"
+            ? "yellow"
+            : "red") as Row["tone"],
       };
     });
   if (blocks.length === 0) return [];
@@ -57,21 +72,32 @@ export function namespaceLines(pairs: NamespacePair[]): string[] {
     implied: "slot from annotation",
     inCode: "slot in code",
     mark: "",
-  };
+    tone: "dim",
+  } as Row;
   const all = [header, ...blocks.flatMap((b) => b.rows)];
   const width = (key: "id" | "implied" | "inCode") => Math.max(...all.map((r) => r[key].length));
-  const line = (r: typeof header) =>
+  const cells = (r: Row) =>
     `  ${r.side.padEnd(5)}${r.id.padEnd(width("id"))}   ${r.implied.padEnd(width("implied"))}   ` +
-    `${r.inCode.padEnd(width("inCode"))}   ${r.mark}`.trimEnd();
+    r.inCode.padEnd(width("inCode"));
+  const line = (r: Row) => `${cells(r)}   ${paint(r.tone, r.mark)}`;
 
   return [
-    "ERC-7201 namespaces",
-    line(header),
-    ...blocks.flatMap((b) => [...b.rows.map(line), `       ${b.meaning}`]),
+    paint("bold", "ERC-7201 namespaces"),
+    paint("dim", cells(header).trimEnd()),
+    ...blocks.flatMap((b) => [...b.rows.map(line), `       ${paint(b.tone, b.meaning)}`]),
   ];
 }
 
-function row(side: string, s: NamespaceSlot, fmt: (slot: string) => string) {
+interface Row {
+  side: string;
+  id: string;
+  implied: string;
+  inCode: string;
+  mark: string;
+  tone: "green" | "red" | "yellow" | "dim";
+}
+
+function row(side: string, s: NamespaceSlot, fmt: (slot: string) => string): Row {
   return {
     side,
     id: s.namespace.slice("erc7201:".length),
@@ -84,6 +110,9 @@ function row(side: string, s: NamespaceSlot, fmt: (slot: string) => string) {
       conflict: "✗ code uses more than one slot",
       unread: "? slot in code not read",
     }[s.status],
+    tone: ({ match: "green", mismatch: "red", conflict: "red", unread: "yellow" } as const)[
+      s.status
+    ],
   };
 }
 
