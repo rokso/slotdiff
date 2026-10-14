@@ -27,6 +27,7 @@ import {
 // Not exported from the package index; the package has no exports map.
 import { errorKinds, type ValidationError } from "@openzeppelin/upgrades-core/dist/validate/run.js";
 import { compareDeployedBytecode, isProvingMatch, type ProvingMatch } from "./bytecode.js";
+import { namespaceSlots, type NamespaceSlot } from "./erc7201.js";
 import { LayoutIntegrityError } from "./errors.js";
 import type { VerifiedSource } from "./explorer.js";
 import type { SolcRunner } from "./solc.js";
@@ -137,6 +138,11 @@ export interface SourceAnalysis {
   /** `uups` when the contract has `upgradeTo` or `upgradeToAndCall`, else `transparent`. */
   kind: Exclude<ProxyKind, "beacon">;
   /**
+   * The slot each ERC-7201 namespace really uses, read from the code
+   * (`$.slot := LOCATION`); OpenZeppelin trusts the annotation alone.
+   */
+  namespaces: NamespaceSlot[];
+  /**
    * OpenZeppelin's safety check (constructors, `selfdestruct`,
    * `delegatecall`, initial values, immutables, initializers), honoring
    * `@custom:oz-upgrades-unsafe-allow` in the source.
@@ -161,10 +167,12 @@ async function analyze(
   contract: string,
 ): Promise<SourceAnalysis> {
   const { data, version } = await validateContract(input, output, solc, contract);
+  const layout = getStorageLayout(data, version);
   return {
-    layout: getStorageLayout(data, version),
+    layout,
     // Typed as any ProxyKind, but only ever uups or transparent.
     kind: inferProxyKind(data, version) as SourceAnalysis["kind"],
+    namespaces: namespaceSlots(output, contract, Object.keys(layout.namespaces ?? {})),
     safety({ kind, unsafeAllow = [] }) {
       // A copy: OpenZeppelin appends to the array it is given.
       const opts = { kind, unsafeAllow: [...unsafeAllow] };

@@ -26,6 +26,12 @@ export {
 export { getSolc, type SolcOptions, type SolcRunner } from "./solc.js";
 export { findBuildInfo, type BuildInfoOptions, type BuildInfoContract } from "./build-info.js";
 export {
+  checkNamespaces,
+  type NamespaceCheck,
+  type NamespacePair,
+  type NamespaceSlot,
+} from "./erc7201.js";
+export {
   layoutFromSource,
   analyzeSource,
   SAFETY_ERROR_KINDS,

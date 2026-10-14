@@ -67,14 +67,59 @@ sources on disk is refused, never used. `--build-info <file>` names one build-in
 is, such as a CI artifact from another checkout; the output then says it was not compared with the
 sources on disk.
 
-Two checks run:
+Three checks run:
 
-- **Storage layout**, by OpenZeppelin's rules, as above.
+- **Storage layout**, by OpenZeppelin's rules, as above, with ERC-7201 namespaces matched by the
+  slot the code really uses.
+- **ERC-7201 slots**: each namespace keeps its data in place and `<new>`'s annotations match its
+  code (see below).
 - **Safety rules** for `<new>`, OpenZeppelin's checks that it can run behind a proxy: constructors, `selfdestruct`,
   `delegatecall`, initial values, immutables and initializers (an initializer order problem is
   only a warning, as in OpenZeppelin). Source exceptions (`@custom:oz-upgrades-unsafe-allow`) are
   honored, and `--unsafe-allow <kinds>` accepts more. For an address, the verified source is
   checked. `--no-safety` skips it.
+
+OpenZeppelin matches ERC-7201 namespaces by their `@custom:storage-location erc7201:<id>`
+annotation alone. slotdiff also reads the slot the code assigns (`assembly { $.slot := LOCATION }`,
+with `LOCATION` a hex constant, the ERC-7201 formula, or `erc7201("id")`) and compares namespaces by
+that slot. The check fails when `<new>` would read a namespace from another slot than the
+deployed code wrote it to, whatever the annotations say, and when an annotation in `<new>`
+disagrees with its code. In `<old>`, already deployed, a disagreement is reported and the
+namespace is matched by its real slot, so correcting a wrong annotation is not reported as a
+deleted namespace. A slot slotdiff cannot read (computed at run time, say) means the upgrade
+could not be checked: exit code 2.
+
+For example, after correcting an annotation that never matched the deployed code:
+
+```
+ERC-7201 namespaces
+       annotation           slot from annotation   slot in code
+  old  example.vault        0xd192…a100            0x0d90…d100    ✗ annotation does not match code
+  new  example.vault.real   0x0d90…d100            0x0d90…d100    ✓
+       Same slot in code on both sides: the storage did not move. Compared as one namespace.
+
+✓ Storage layout   compatible
+✓ ERC-7201 slots   compared by the slot in code (see above)
+✓ Safety rules     no problems found (transparent proxy)
+
+Safe to upgrade.
+```
+
+Changing the constant to match the wrong annotation instead would move the data:
+
+```
+ERC-7201 namespaces
+       annotation      slot from annotation   slot in code
+  old  example.vault   0xd192…a100            0x0d90…d100    ✗ annotation does not match code
+  new  example.vault   0xd192…a100            0xd192…a100    ✓
+       The new code moves this namespace from 0x0d90…d100 to 0xd192…a100: its data would be left behind. Keep the slot the deployed code uses, under an annotation that matches it.
+
+✓ Storage layout   compatible
+✗ ERC-7201 slots   problems found in <new> (see above)
+✓ Safety rules     no problems found (transparent proxy)
+
+Not safe to upgrade: an ERC-7201 namespace fails the slot check.
+```
 
 The proxy kind comes from `<old>`'s implementation: UUPS when it has `upgradeTo` or
 `upgradeToAndCall`, beacon for a beacon proxy, transparent otherwise. So a UUPS implementation that
@@ -157,15 +202,15 @@ src/Vault.sol:7: Inserted `inserted`
 The explorer defaults to Etherscan's v2 API, where one key covers every chain it indexes. For another
 Etherscan-compatible explorer, such as Blockscout, pass `{ apiUrl }` (a key is optional there).
 
-### Safety rules too
+### Safety rules and ERC-7201 slots too
 
-`analyzeSource` is `layoutFromSource` plus OpenZeppelin's safety check, from one compile, as the
-command line runs it. Pass the kind of the proxy being upgraded, not the new contract's
+`analyzeSource` is `layoutFromSource` plus OpenZeppelin's safety check and the slot each ERC-7201
+namespace really uses, from one compile, as the command line runs them. Pass the kind of the proxy being upgraded, not the new contract's
 own: a UUPS implementation that lost its upgrade function would otherwise look transparent and
 pass.
 
 ```ts
-import { analyzeSource, diffLayouts, findBuildInfo, getSolc } from "slotdiff";
+import { analyzeSource, checkNamespaces, diffLayouts, findBuildInfo, getSolc } from "slotdiff";
 
 async function analyze(contract: string) {
   const build = await findBuildInfo(process.cwd(), contract);
@@ -174,9 +219,13 @@ async function analyze(contract: string) {
 const old = await analyze("src/Vault.sol:Vault");
 const next = await analyze("src/VaultV2.sol:VaultV2");
 
-const layout = diffLayouts(old.layout, next.layout);
+// Pair ERC-7201 namespaces by the slot the code uses, as the command line does.
+const slots = checkNamespaces(old, next); // result: "pass", "fail" or "unread"
+const layout = diffLayouts(slots.layout, next.layout);
 const safety = next.safety({ kind: old.kind }); // the kind of the proxy being upgraded
-if (!layout.ok || !safety.ok) console.error(layout.explain(), safety.explain());
+if (!layout.ok || slots.result !== "pass" || !safety.ok) {
+  console.error(layout.explain(), slots.pairs, safety.explain());
+}
 ```
 
 `safety` also takes `unsafeAllow` (error kinds to accept, listed in `SAFETY_ERROR_KINDS`), on top
@@ -283,7 +332,8 @@ newer slotdiff.
 | `verifyRecord(provider, address, value)`                     | Load a saved record, checked against the chain                           |
 | `parseRecord(value, address?)`                               | Load a saved record, checked offline                                     |
 | `layoutFromSource(input, solc, "file.sol:Name")`             | Layout from standard-json input, including ERC-7201 namespaces. No proof |
-| `analyzeSource(input, solc, "file.sol:Name")`                | The layout, the inferred proxy `kind`, and `safety({ kind })`            |
+| `analyzeSource(input, solc, "file.sol:Name")`                | The layout, proxy `kind`, ERC-7201 `namespaces` and `safety({ kind })`   |
+| `checkNamespaces(old, next)`                                 | ERC-7201 namespaces paired by real slot; a moved one fails               |
 | `findBuildInfo(root, contract, { file? })`                   | Your build info for a contract: input, compiler version, deployed code   |
 | `getSolc(version)`                                           | Native solc, from a cache or downloaded and checksum-verified            |
 | `readProxy`, `readImplementation`, `readCode`, `readChainId` | Chain reads                                                              |
@@ -304,10 +354,10 @@ Renames and retypes follow OpenZeppelin's NatSpec tags, `@custom:oz-renamed-from
 - Solidity only.
 - Struct members cannot be renamed or retyped: Solidity has no NatSpec on struct members, so
   OpenZeppelin's tags cannot reach them.
-- ERC-7201 namespaces are located by their `@custom:storage-location erc7201:<id>` annotation, as
-  OpenZeppelin does. The `bytes32` slot constant your code actually uses is not checked against
-  it, so moving the constant while leaving the annotation unchanged is not detected. Keep the two in
-  sync, for example by deriving the constant with the ERC-7201 formula in a test.
+- An ERC-7201 slot is read only from a `$.slot := ...` assignment whose value is a constant (a hex
+  literal, the ERC-7201 formula, or `erc7201("id")`), directly or through a local variable set
+  once or a function with no arguments that returns one. Any other slot (computed at run time, a
+  library's constant) is not read, and the upgrade is reported as not checked.
 
 ## License
 

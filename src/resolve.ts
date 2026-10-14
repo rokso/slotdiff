@@ -43,7 +43,7 @@ export async function resolveLayout(
 /**
  * `resolveLayout` plus the analysis of the verified source: the proxy kind,
  * inferred from the code as OpenZeppelin recommends (not from the admin slot,
- * which a UUPS proxy can have set), and the safety check.
+ * which a UUPS proxy can have set), the ERC-7201 slots and the safety check.
  * Internal, for the CLI.
  */
 export async function rebuild(
