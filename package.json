@@ -67,7 +67,7 @@
     "upgradeable",
     "proxy",
     "storage-layout",
-    "upgrade-safety",
+    "erc7201",
     "foundry",
     "hardhat"
   ],
