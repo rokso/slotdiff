@@ -32,6 +32,12 @@ export {
   type NamespaceSlot,
 } from "./erc7201.js";
 export {
+  checkUpgrade,
+  type UpgradeCheck,
+  type UpgradeOptions,
+  type UpgradeSide,
+} from "./upgrade.js";
+export {
   layoutFromSource,
   analyzeSource,
   SAFETY_ERROR_KINDS,

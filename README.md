@@ -171,10 +171,10 @@ The explorer defaults to Etherscan's v2 API, where one key covers every chain it
 
 ### Safety rules and ERC-7201 slots too
 
-`analyzeSource` is `layoutFromSource` plus OpenZeppelin's safety check and the slot each ERC-7201 namespace really uses, from one compile, as the command line runs them. Pass the kind of the proxy being upgraded, not the new contract's own: a UUPS implementation that lost its upgrade function would otherwise look transparent and pass.
+`analyzeSource` is `layoutFromSource` plus OpenZeppelin's safety check and the slot each ERC-7201 namespace really uses, from one compile. `checkUpgrade` runs all three checks on two analyses and gives one verdict, as the command line does.
 
 ```ts
-import { analyzeSource, checkNamespaces, diffLayouts, findBuildInfo, getSolc } from "slotdiff";
+import { analyzeSource, checkUpgrade, findBuildInfo, getSolc } from "slotdiff";
 
 async function analyze(contract: string) {
   const build = await findBuildInfo(process.cwd(), contract);
@@ -183,16 +183,13 @@ async function analyze(contract: string) {
 const old = await analyze("src/Vault.sol:Vault");
 const next = await analyze("src/VaultV2.sol:VaultV2");
 
-// Pair ERC-7201 namespaces by the slot the code uses, as the command line does.
-const slots = checkNamespaces(old, next); // result: "pass", "fail" or "unread"
-const layout = diffLayouts(slots.layout, next.layout);
-const safety = next.safety({ kind: old.kind }); // the kind of the proxy being upgraded
-if (!layout.ok || slots.result !== "pass" || !safety.ok) {
-  console.error(layout.explain(), slots.pairs, safety.explain());
+const check = checkUpgrade(old, next); // result: "pass", "fail" or "unchecked"
+if (check.result !== "pass") {
+  console.error(check.layout.explain(), check.namespaces.explain(), check.safety?.explain());
 }
 ```
 
-`safety` also takes `unsafeAllow` (error kinds to accept, listed in `SAFETY_ERROR_KINDS`), on top of `@custom:oz-upgrades-unsafe-allow` in the source.
+The safety rules take the proxy kind from `old`, the proxy being upgraded, never from `next`: a UUPS implementation that lost its upgrade function would otherwise look transparent and pass. For a beacon proxy, pass `{ ...old, kind: "beacon" }`. `checkUpgrade` also takes `unsafeAllowRenames`, `unsafeAllow` (error kinds to accept, listed in `SAFETY_ERROR_KINDS`, on top of `@custom:oz-upgrades-unsafe-allow` in the source) and `skipSafety`. `unchecked` means nothing failed but an ERC-7201 slot could not be read (`check.namespaces.result` is `unread`). With `skipSafety`, `pass` covers the layout and slots only, and `check.safety` is absent. The pieces are there too: `checkNamespaces`, `diffLayouts` and the analysis's own `safety({ kind })`.
 
 ### Keep records, skip the rebuild next time
 
@@ -216,23 +213,34 @@ try {
 
 Key records by **implementation**, and read the implementation from the proxy every time. A record for an old implementation still verifies after the proxy is upgraded, because that code is still deployed at its own address.
 
+A record also keeps the proxy `kind` its code implies and the slot each ERC-7201 namespace really uses (`namespaces`), so it can stand in for `old` in `checkUpgrade`. Pass the proxy's own kind when you know it: `resolveProxyLayout` returns it as `kind` (`beacon` behind a beacon). Otherwise fall back to `"uups"`, never `"transparent"`: `"uups"` only adds the requirement that `next` keeps its upgrade function, so at worst it fails a transparent proxy's upgrade, while `"transparent"` would pass a UUPS implementation that lost it.
+
+```ts
+const check = checkUpgrade({ ...record, kind: record.kind ?? "uups" }, next);
+```
+
+Older records have neither field, and their namespaces come out unchecked rather than trusted by annotation. To compare two records, as a deploy step might, pass `{ skipSafety: true }`: `next` then needs no analysis and `old` no kind.
+
 Without an RPC, `parseRecord(value, address)` checks a record's shape and proof offline. It cannot tell whether the proxy has moved on, so prefer `verifyRecord` whenever you can reach the chain.
 
-A record is bound to the deployed code, not to its own `layout` field: an edited layout in a saved record still verifies. Treat saved records as trusted input and review changes to them like code.
+A record is bound to the deployed code, not to what it says about that code: an edited `layout`, `kind` or `namespaces` in a saved record still verifies. Each changes the verdict (an edited `kind` of `"transparent"` drops the check that a UUPS implementation keeps its upgrade function). Treat saved records as trusted input and review changes to them like code.
 
 ### No explorer: prove your own build
 
 If you deployed it yourself, your build can serve as the source. `proveLocalBuild` compares the deployed code with your compiler output and returns a record only when they prove to be the same build.
 
 ```ts
-import { findBuildInfo, getSolc, layoutFromSource, proveLocalBuild } from "slotdiff";
+import { analyzeSource, findBuildInfo, getSolc, proveLocalBuild } from "slotdiff";
 
 const build = await findBuildInfo(process.cwd(), "src/Vault.sol:Vault");
 const solc = await getSolc(build.solcVersion);
+const { layout, kind, namespaces } = await analyzeSource(build.input, solc, build.contract);
 const { bytecodeMatch, record } = await proveLocalBuild(provider, impl, {
   contract: build.contract,
   compiler: solc.longVersion,
-  layout: await layoutFromSource(build.input, solc, build.contract),
+  layout,
+  kind, // so the record can stand in for `old` in checkUpgrade
+  namespaces,
   deployedBytecode: build.deployedBytecode!,
   immutableReferences: build.immutableReferences,
 });
@@ -260,9 +268,9 @@ Contracts built without a metadata hash (common for deterministic CREATE2 deploy
 slotdiff fails closed: it never treats "could not check" as "safe".
 
 - `LayoutUnavailableError`: no answer. Not a proxy, unverified source, explorer outage or rate limit, no compiler for the platform. Falling back to another source is reasonable.
-- `LayoutIntegrityError`: an answer that cannot be trusted. Source that does not compile to the deployed code, a weak match, a record from another chain or for other code. Never fall back on this one.
+- `LayoutIntegrityError`: an answer that cannot be trusted. Source that does not compile to the deployed code, a weak match, a record from another chain or for other code, a record or analysis that contradicts itself (namespace slots that do not fit its layout). Never fall back on this one.
 
-A few problems that are yours to fix throw a plain `Error`: a rejected explorer API key, a compiler binary that fails to run (for example the wrong architecture), and a record in a format from a newer slotdiff.
+Problems that are yours to fix throw a plain `Error`: a rejected explorer API key, a compiler binary that fails to run (for example the wrong architecture), a record in a format from a newer slotdiff, and wrong arguments, such as a contract that is not in the compiler input, an unknown proxy kind given to `checkUpgrade`, an unknown `unsafeAllow` kind, or `checkUpgrade` asked for the safety rules without an analysis of `next`.
 
 ## API
 
@@ -276,7 +284,8 @@ A few problems that are yours to fix throw a plain `Error`: a rejected explorer 
 | `parseRecord(value, address?)` | Load a saved record, checked offline |
 | `layoutFromSource(input, solc, "file.sol:Name")` | Layout from standard-json input, including ERC-7201 namespaces. No proof |
 | `analyzeSource(input, solc, "file.sol:Name")` | The layout, proxy `kind`, ERC-7201 `namespaces` and `safety({ kind })` |
-| `checkNamespaces(old, next)` | ERC-7201 namespaces paired by real slot; a moved one fails |
+| `checkUpgrade(old, next, options?)` | Layout, ERC-7201 slots and safety rules in one verdict: `pass`, `fail` or `unchecked` |
+| `checkNamespaces(old, next)` | ERC-7201 namespaces paired by real slot; a moved one fails. `explain()` |
 | `findBuildInfo(root, contract, { file? })` | Your build info for a contract: input, compiler version, deployed code |
 | `getSolc(version)` | Native solc, from a cache or downloaded and checksum-verified |
 | `readProxy`, `readImplementation`, `readCode`, `readChainId` | Chain reads |

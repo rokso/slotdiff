@@ -2,8 +2,8 @@
  * `analyzeSource` with a real solc: the safety check must judge the contract
  * asked for, and infer its proxy kind through inheritance.
  */
-import { describe, it, expect, beforeAll } from "vitest";
-import type { SolcInput } from "@openzeppelin/upgrades-core";
+import { describe, it, expect, beforeAll, vi } from "vitest";
+import { UpgradeableContractErrorReport, type SolcInput } from "@openzeppelin/upgrades-core";
 // From the public entry point: library users get the same check as the CLI.
 import { analyzeSource, type SafetyErrorKind } from "../src/index.js";
 import { getSolc, type SolcRunner } from "../src/solc.js";
@@ -71,4 +71,50 @@ describe("analyzeSource", () => {
     analysis.safety({ kind: "uups", unsafeAllow: allow });
     expect(allow).toEqual(["external-library-linking"]);
   }, 60_000);
+
+  it("passes explain's color choice on to OpenZeppelin", async () => {
+    const sources = {
+      "src/C.sol": `${header}contract C { uint256 a; constructor() { a = 1; } }\n`,
+    };
+    const safety = (await analyzeSource(input(sources), solc, "src/C.sol:C")).safety({
+      kind: "transparent",
+    });
+    const spy = vi.spyOn(UpgradeableContractErrorReport.prototype, "explain");
+    safety.explain(false);
+    expect(spy).toHaveBeenCalledWith(false);
+    spy.mockRestore();
+  }, 60_000);
+
+  it.each([
+    ["a contract name the input lacks", "src/C.sol:Missing"],
+    ["a source path the input names otherwise", "contracts/C.sol:C"],
+  ])(
+    "names the problem for %s",
+    async (_, contract) => {
+      const sources = { "src/C.sol": `${header}contract C { uint256 a; }\n` };
+      await expect(analyzeSource(input(sources), solc, contract)).rejects.toThrow(
+        `${contract} is not in the compiler input`,
+      );
+    },
+    60_000,
+  );
+
+  it("still calls out an abstract contract as such", async () => {
+    const sources = { "src/C.sol": `${header}abstract contract C { uint256 a; }\n` };
+    await expect(analyzeSource(input(sources), solc, "src/C.sol:C")).rejects.toThrow(
+      /compiled to no bytecode/,
+    );
+  }, 60_000);
+
+  it.each(["bogus", "struct-definition"])(
+    "refuses an unsafeAllow kind it does not know (%s), which would accept nothing",
+    async (kind) => {
+      const sources = { "src/C.sol": `${header}contract C { uint256 a; }\n` };
+      const analysis = await analyzeSource(input(sources), solc, "src/C.sol:C");
+      expect(() =>
+        analysis.safety({ kind: "transparent", unsafeAllow: [kind as SafetyErrorKind] }),
+      ).toThrow(`Unknown unsafeAllow error kind "${kind}"`);
+    },
+    60_000,
+  );
 });

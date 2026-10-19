@@ -2,6 +2,7 @@
  * The CLI report as text: the ERC-7201 grid for each kind of slot result, and
  * the check list. The CLI tests cover the common paths end to end.
  */
+import { stripVTControlCharacters } from "node:util";
 import { describe, it, expect } from "vitest";
 import { checkLines, namespaceLines } from "../src/report.js";
 import { checkNamespaces, type NamespaceSlot } from "../src/erc7201.js";
@@ -10,16 +11,17 @@ import type { StorageLayout } from "@openzeppelin/upgrades-core";
 const A = "0xaaaa000000000000000000000000000000000000000000000000000000001100";
 const B = "0xbbbb000000000000000000000000000000000000000000000000000000002200";
 
+const side = (namespaces: NamespaceSlot[]) => ({
+  layout: {
+    storage: [],
+    types: {},
+    namespaces: Object.fromEntries(namespaces.map((n) => [n.namespace, []])),
+  } as unknown as StorageLayout,
+  namespaces,
+});
+
 // The grid for old and new slots, paired as the CLI pairs them.
 function grid(old: NamespaceSlot[], next: NamespaceSlot[]): string[] {
-  const side = (namespaces: NamespaceSlot[]) => ({
-    layout: {
-      storage: [],
-      types: {},
-      namespaces: Object.fromEntries(namespaces.map((n) => [n.namespace, []])),
-    } as unknown as StorageLayout,
-    namespaces,
-  });
   return namespaceLines(checkNamespaces(side(old), side(next)).pairs);
 }
 
@@ -47,6 +49,17 @@ describe("namespaceLines", () => {
       "  new  x            0xaaaa…1100            not read       ? slot in code not read",
       "       The slot in code could not be read (computed at run time?), so this namespace could not be checked.",
     ]);
+  });
+
+  // For library callers, such as a build tool printing its own report.
+  it("is what a namespace check explains, colored unless asked not to", () => {
+    const old = [ns("x", A, {})];
+    const next = [ns("x", A, { actual: B, status: "mismatch" })];
+    const check = checkNamespaces(side(old), side(next));
+    expect(check.explain(false)).toBe(grid(old, next).join("\n"));
+    expect(check.explain(false)).toContain("its data would be left behind");
+    expect(check.explain()).not.toBe(check.explain(false));
+    expect(stripVTControlCharacters(check.explain())).toBe(check.explain(false));
   });
 
   it("marks a namespace given more than one slot", () => {

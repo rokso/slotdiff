@@ -11,7 +11,9 @@
  */
 
 import type { SolcOutput, StorageLayout } from "@openzeppelin/upgrades-core";
+import { styleText } from "node:util";
 import { LayoutIntegrityError } from "./errors.js";
+import { namespaceLines, plain } from "./report.js";
 // Not exported from the package index; the package has no exports map, and
 // all exist since 1.46.0, the lowest version slotdiff accepts.
 import { getStorageLocationAnnotation } from "@openzeppelin/upgrades-core/dist/storage/namespace.js";
@@ -172,6 +174,8 @@ export interface NamespaceCheck {
   pairs: NamespacePair[];
   /** `fail` when any pair has a problem other than `unread`; `unread` when a slot could not be read. */
   result: "pass" | "fail" | "unread";
+  /** The CLI's namespace grid, with what each problem means; empty when nothing is worth showing. */
+  explain(color?: boolean): string;
 }
 
 /**
@@ -236,6 +240,12 @@ export function checkNamespaces(
       : problems.includes("unread")
         ? "unread"
         : "pass",
+    // Colored by default, as OpenZeppelin's reports are.
+    explain: (color = true) =>
+      namespaceLines(
+        pairs,
+        color ? (format, text) => styleText(format, text, { validateStream: false }) : plain,
+      ).join("\n"),
   };
 }
 
