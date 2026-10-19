@@ -11,3 +11,10 @@ updates:
     groups:
       dev:
         dependency-type: development
+    ignore:
+      # The types follow the lowest Node in engines, not the newest.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      # typescript-eslint supports TypeScript below 6.1 only.
+      - dependency-name: typescript
+        versions: [">=6.1.0"]
