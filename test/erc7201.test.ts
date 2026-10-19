@@ -201,7 +201,7 @@ contract C is Base {
     expect(namespaces[0].status).toBe("unread");
   }, 60_000);
 
-  it("leaves a namespace the code never assigns unread", async () => {
+  it("marks a namespace the code never assigns unused, not unread", async () => {
     const content = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 contract C {
@@ -210,7 +210,111 @@ contract C {
 }
 `;
     const { namespaces } = await analyze(content);
-    expect(namespaces[0].status).toBe("unread");
+    expect(namespaces[0].status).toBe("unused");
+  }, 60_000);
+});
+
+describe("unused namespaces", () => {
+  // C's base declares S (with a nested struct and a mapping of it); with
+  // `getter`, the base also assigns S's slot in a virtual getter.
+  const statusOf = async (body: string, extra = "", getter = true) => {
+    const base = getter
+      ? `function _s() internal pure virtual returns (S storage $) { assembly { $.slot := ${slot("x.other")} } }`
+      : "";
+    const content = `// SPDX-License-Identifier: MIT
+pragma solidity 0.8.24;
+${extra}
+contract Base {
+    /// @custom:storage-location erc7201:x.main
+    struct S { uint256 a; Inner inner; mapping(uint256 => Inner) byId; }
+    struct Inner { uint256 b; }
+    ${base}
+}
+contract C is Base {
+    ${body}
+}
+`;
+    return (await analyze(content)).namespaces[0].status;
+  };
+
+  // The base's assignment is set aside, but its code still runs through the override.
+  it.each([
+    ["super", "super._s()"],
+    ["the base's name", "Base._s()"],
+  ])(
+    "is never claimed for a base getter reached through %s",
+    async (_, call) => {
+      const body = `function _s() internal pure override returns (S storage $) { return ${call}; }
+    function a() external view returns (uint256) { return _s().a; }`;
+      expect(await statusOf(body)).toBe("unread");
+    },
+    60_000,
+  );
+
+  it.each([
+    ["a struct nested in it", "Inner"],
+    ["a mapping", "mapping(uint256 => uint256)"],
+  ])(
+    "is never claimed when code assigns a slot to %s",
+    async (_, type) => {
+      const body = `function _p() internal pure returns (${type} storage $) { assembly { $.slot := 1 } }`;
+      expect(await statusOf(body, "", false)).toBe("unread");
+    },
+    60_000,
+  );
+
+  // Its data may live under another struct's name, which OpenZeppelin does not see either.
+  it.each([
+    [
+      "a library's struct",
+      `library L {
+    struct Layout { uint256 a; }
+    bytes32 internal constant SLOT = ${slot("x.main")};
+    function layout() internal pure returns (Layout storage $) { assembly { $.slot := SLOT } }
+}`,
+      "function a() external view returns (uint256) { return L.layout().a; }",
+    ],
+    [
+      "a struct without an annotation",
+      "",
+      `struct T { uint256 a; }
+    function _t() internal pure returns (T storage $) { assembly { $.slot := ${slot("x.other")} } }`,
+    ],
+  ])(
+    "is never claimed when code places %s at a known slot",
+    async (_, extra, body) => {
+      expect(await statusOf(body, extra, false)).toBe("unread");
+    },
+    60_000,
+  );
+
+  it("is never claimed when an overridden function places a struct without an annotation", async () => {
+    const content = `// SPDX-License-Identifier: MIT
+pragma solidity 0.8.24;
+contract Base {
+    /// @custom:storage-location erc7201:x.main
+    struct S { uint256 a; }
+    struct T { uint256 a; }
+    function _t() internal pure virtual returns (T storage $) { assembly { $.slot := ${slot("x.main")} } }
+}
+contract C is Base {
+    function _t() internal pure override returns (T storage $) { return super._t(); }
+}
+`;
+    expect((await analyze(content)).namespaces[0].status).toBe("unread");
+  }, 60_000);
+
+  it("is unused when nothing assigns it", async () => {
+    expect(await statusOf("", "", false)).toBe("unused");
+  }, 60_000);
+
+  it("stays unused next to an unrelated struct pointer, as OpenZeppelin's StorageSlot has", async () => {
+    const lib = `library StorageSlot {
+    struct AddressSlot { address value; }
+    function getAddressSlot(bytes32 slot) internal pure returns (AddressSlot storage r) { assembly { r.slot := slot } }
+}`;
+    const body = `function owner() external view returns (address) { return StorageSlot.getAddressSlot(bytes32(uint256(1))).value; }`;
+    expect(await statusOf(body, lib, false)).toBe("unused");
   }, 60_000);
 });
 
@@ -582,6 +686,23 @@ describe("checkNamespaces", () => {
     expect(() => checkNamespaces(side([bad]), side([match("x")]))).toThrow(LayoutIntegrityError);
   });
 
+  it.each([
+    ["unused on both sides", [unused("a")], [unused("a")], "pass", undefined],
+    ["unused, then assigned its annotated slot", [unused("a")], [match("a")], "pass", undefined],
+    ["assigned, then unused", [match("a")], [unused("a")], "pass", undefined],
+    [
+      "unused, then assigned elsewhere",
+      [unused("a")],
+      [mismatch("a", slot("b"))],
+      "fail",
+      "mismatch",
+    ],
+    ["unused, then unreadable", [unused("a")], [unread("a")], "unread", "unread"],
+  ])("checks a namespace %s", (_, oldSlots, nextSlots, result, problem) => {
+    const checked = checkNamespaces(side(oldSlots), side(nextSlots));
+    expect([checked.result, checked.pairs[0].problem]).toEqual([result, problem]);
+  });
+
   it("renames nothing when the slots already line up", async () => {
     const c = await analyze(
       contract(
@@ -615,6 +736,10 @@ function match(id: string): NamespaceSlot {
 
 function mismatch(id: string, actual: string): NamespaceSlot {
   return { namespace: `erc7201:${id}`, expected: slot(id), actual, status: "mismatch" };
+}
+
+function unused(id: string): NamespaceSlot {
+  return { namespace: `erc7201:${id}`, expected: slot(id), status: "unused" };
 }
 
 function unread(id: string): NamespaceSlot {

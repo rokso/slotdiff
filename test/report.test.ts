@@ -47,8 +47,46 @@ describe("namespaceLines", () => {
       "       annotation   slot from annotation   slot in code",
       "  old  x            0xaaaa…1100            not read       ? slot in code not read",
       "  new  x            0xaaaa…1100            not read       ? slot in code not read",
-      "       The slot in code could not be read (computed at run time?), so this namespace could not be checked.",
+      "       The old slot is not known (not read from its code, or missing from an older record), so this namespace could not be checked.",
     ]);
+  });
+
+  it.each([
+    ["read", {}],
+    ["unused", { status: "unused", actual: undefined }],
+  ] as const)("says when only the new slot could not be read (old %s)", (_, old) => {
+    const unread = ns("x", A, { status: "unread", actual: undefined });
+    expect(grid([ns("x", A, old)], [unread]).at(-1)).toBe(
+      "       The slot in the new code could not be read (set from a value slotdiff does not evaluate), so this namespace could not be checked.",
+    );
+  });
+
+  const unused = ns("x", A, { status: "unused", actual: undefined });
+
+  it.each([
+    ["on both sides", [unused], [unused]],
+    ["in old, then assigned its annotated slot", [unused], [ns("x", A, {})]],
+    ["only in new", [], [unused]],
+    ["only in old", [unused], []],
+  ])("leaves out a namespace no code assigns %s", (_, before, after) => {
+    expect(grid(before, after)).toEqual([]);
+  });
+
+  it("shows a namespace the new code stops assigning, and where its data stays", () => {
+    const lines = grid([ns("x", A, {})], [unused]);
+    expect(lines[3]).toBe(
+      "  new  x            0xaaaa…1100            none           · not assigned in code",
+    );
+    expect(lines[4]).toBe(
+      "       The new code no longer assigns this namespace; its data stays at 0xaaaa…1100.",
+    );
+  });
+
+  it("says when that data is not where its annotation points", () => {
+    const lines = grid([ns("x", A, { status: "mismatch", actual: B })], [unused]);
+    expect(lines.at(-1)).toContain(
+      "its data stays at 0xbbbb…2200, not where its annotation points.",
+    );
   });
 
   // For library callers, such as a build tool printing its own report.
