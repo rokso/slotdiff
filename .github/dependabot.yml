@@ -1,16 +1,18 @@
 version: 2
+# One pull request a quarter for every ecosystem; security updates still come when needed.
+multi-ecosystem-groups:
+  all:
+    schedule:
+      interval: quarterly
 updates:
   - package-ecosystem: github-actions
     directory: /
-    schedule:
-      interval: monthly
+    patterns: ["*"]
+    multi-ecosystem-group: all
   - package-ecosystem: npm
     directory: /
-    schedule:
-      interval: monthly
-    groups:
-      dev:
-        dependency-type: development
+    patterns: ["*"]
+    multi-ecosystem-group: all
     ignore:
       # The types follow the lowest Node in engines, not the newest.
       - dependency-name: "@types/node"
