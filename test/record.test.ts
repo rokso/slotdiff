@@ -11,6 +11,7 @@ import { codeSha256 } from "../src/chain.js";
 import { LayoutIntegrityError, LayoutUnavailableError } from "../src/errors.js";
 import { resolveLayout, proveLocalBuild } from "../src/resolve.js";
 import { makeMockChain } from "./helpers/mock-chain.js";
+import type { NamespaceSlot } from "../src/erc7201.js";
 
 const IMPL = "0x00000000000000000000000000000000000000bb";
 const OTHER_ADDRESS = "0x00000000000000000000000000000000000000cc";
@@ -32,6 +33,23 @@ const record = (over: Record<string, unknown> = {}): LayoutRecord =>
     layout: { storage: [], types: {} },
     ...over,
   }) as LayoutRecord;
+
+const SLOT = {
+  namespace: "erc7201:x.main",
+  expected: "0x" + "ab".repeat(31) + "00",
+  actual: "0x" + "ab".repeat(31) + "00",
+  status: "match",
+};
+
+// A layout with three namespaces, and the slot of each as a record keeps it.
+const NS_LAYOUT = {
+  storage: [],
+  types: {},
+  namespaces: { "erc7201:x.main": [], "erc7201:y.main": [], "erc7201:z.main": [] },
+};
+const UNREAD = { namespace: "erc7201:y.main", expected: "0x" + "cd".repeat(32), status: "unread" };
+const CONFLICT = { ...UNREAD, namespace: "erc7201:z.main", status: "conflict" };
+const slots = (namespaces: unknown[]) => ({ layout: NS_LAYOUT, namespaces });
 
 const saved = (over: Record<string, unknown> = {}) => JSON.parse(JSON.stringify(record(over)));
 
@@ -82,8 +100,43 @@ describe("parseRecord", () => {
     ["contract", { contract: "A" }],
     ["source", { source: "guess" }],
     ["layout", { layout: { storage: {} } }],
+    ["kind", { kind: "beacon" }],
+    // Never a namespace name a plain object lookup resolves on its prototype.
+    ["layout", { layout: { ...NS_LAYOUT, namespaces: JSON.parse('{"__proto__": []}') } }],
+    ["layout", { layout: { ...NS_LAYOUT, namespaces: { constructor: [] } } }],
+    ["namespaces", { namespaces: {} }],
+    ["namespaces", slots([null])],
+    ["namespaces", slots([{ ...SLOT, status: "guess" }])],
+    ["namespaces", slots([{ ...SLOT, expected: "0x01" }])],
+    ["namespaces", slots([{ ...SLOT, expected: [SLOT.expected] }])],
+    ["namespaces", slots([{ ...SLOT, actual: 1 }])],
+    ["namespaces", slots([{ ...SLOT, actual: "0x01" }])],
+    ["namespaces", slots([{ ...SLOT, actual: "garbage", status: "mismatch" }])],
+    ["namespaces", slots([{ ...SLOT, namespace: undefined }])],
+    // A stray or repeated slot could take another's place when namespaces are paired.
+    ["namespaces", slots([SLOT, SLOT])],
+    ["namespaces", slots([{ ...SLOT, namespace: "erc7201:ghost" }])],
+    ["namespaces", { namespaces: [SLOT] }],
+    // The status must agree with the slot read.
+    ["namespaces", slots([{ ...SLOT, status: "mismatch" }])],
+    ["namespaces", slots([{ ...SLOT, actual: "0x" + "11".repeat(32) }])],
+    ["namespaces", slots([{ ...UNREAD, actual: UNREAD.expected }])],
+    ["namespaces", slots([{ ...CONFLICT, actual: CONFLICT.expected }])],
   ])("refuses a malformed %s", (field, change) => {
     expect(() => parseRecord(saved(change))).toThrow(new RegExp(`malformed ${field}`));
+  });
+
+  it("loads the proxy kind and namespace slots when present, and records without them", () => {
+    const upper = { ...SLOT, actual: SLOT.actual.toUpperCase().replace("0X", "0x") };
+    const full = { kind: "uups", ...slots([upper, UNREAD, CONFLICT]) };
+    expect(parseRecord(saved(full))).toEqual(JSON.parse(JSON.stringify(record(full))));
+    expect(parseRecord(saved(slots([])))).toEqual(record(slots([])));
+    expect(parseRecord(saved())).toEqual(record());
+  });
+
+  it("loads a namespace under a storage location formula other than erc7201", () => {
+    const custom = { layout: { ...NS_LAYOUT, namespaces: { "custom:x.main": [] } } };
+    expect(parseRecord(saved(custom))).toEqual(record(custom));
   });
 
   it("refuses a non-object", () => {
@@ -102,7 +155,7 @@ describe("resolveLayout", () => {
 });
 
 describe("proveLocalBuild", () => {
-  const build = { contract: "a.sol:A", layout: { storage: [], types: {} } };
+  const build = { contract: "a.sol:A", layout: NS_LAYOUT as unknown as LayoutRecord["layout"] };
 
   it("gives a record that verifies when the chain runs the build", async () => {
     const provider = makeMockChain({ code: { [IMPL]: PROVEN } });
@@ -112,6 +165,18 @@ describe("proveLocalBuild", () => {
     });
     expect(bytecodeMatch).toBe("exact");
     expect(await verifyRecord(provider, IMPL, JSON.parse(JSON.stringify(record)))).toEqual(record);
+  });
+
+  it("carries the proxy kind and namespace slots it is given", async () => {
+    const provider = makeMockChain({ code: { [IMPL]: PROVEN } });
+    const { record } = await proveLocalBuild(provider, IMPL, {
+      ...build,
+      deployedBytecode: PROVEN,
+      kind: "uups",
+      namespaces: [SLOT as NamespaceSlot],
+    });
+    expect(record?.kind).toBe("uups");
+    expect(record?.namespaces).toEqual([SLOT]);
   });
 
   it("gives no record when the chain runs other code", async () => {

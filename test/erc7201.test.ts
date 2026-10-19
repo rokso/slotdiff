@@ -7,8 +7,9 @@ import { describe, it, expect, beforeAll } from "vitest";
 import type { SolcInput } from "@openzeppelin/upgrades-core";
 import { calculateERC7201StorageLocation } from "@openzeppelin/upgrades-core/dist/utils/erc7201.js";
 import { analyzeSource } from "../src/reconstruct.js";
-import { checkNamespaces, type NamespaceSlot } from "../src/erc7201.js";
+import { checkNamespaces, namespaceSlots, type NamespaceSlot } from "../src/erc7201.js";
 import { diffLayouts } from "../src/diff.js";
+import { LayoutIntegrityError } from "../src/errors.js";
 import type { StorageLayout } from "@openzeppelin/upgrades-core";
 import { getSolc, type SolcRunner } from "../src/solc.js";
 
@@ -446,7 +447,7 @@ describe("checkNamespaces", () => {
       layout: layoutWith({ "erc7201:a": "A", "erc7201:b": "B" }),
       namespaces: [mismatch("a", slot("b")), mismatch("b", slot("a"))],
     };
-    const checked = checkNamespaces(old, { namespaces: [match("a"), match("b")] });
+    const checked = checkNamespaces(old, side([match("a"), match("b")]));
     expect(checked.result).toBe("pass");
     expect(checked.layout.namespaces).toEqual({ "erc7201:b": "A", "erc7201:a": "B" });
   });
@@ -457,7 +458,7 @@ describe("checkNamespaces", () => {
       layout: layoutWith({ "erc7201:a": "A", "erc7201:b": "B" }),
       namespaces: [mismatch("a", slot("b")), mismatch("b", slot("c"))],
     };
-    const checked = checkNamespaces(old, { namespaces: [match("b")] });
+    const checked = checkNamespaces(old, side([match("b")]));
     expect(checked.layout).toBe(old.layout);
   });
 
@@ -466,7 +467,7 @@ describe("checkNamespaces", () => {
     ["the old slot", [unread("a")], [match("a")]],
   ])("cannot check a namespace when %s is not read", (_, oldSlots, nextSlots) => {
     const old = { layout: layoutWith({ "erc7201:a": "A" }), namespaces: oldSlots };
-    const checked = checkNamespaces(old, { namespaces: nextSlots });
+    const checked = checkNamespaces(old, side(nextSlots));
     expect(checked.result).toBe("unread");
     expect(checked.pairs[0].problem).toBe("unread");
   });
@@ -477,7 +478,7 @@ describe("checkNamespaces", () => {
       layout: layoutWith({ "erc7201:x": "X" }),
       namespaces: [mismatch("x", slot("s1"))],
     };
-    const next = { namespaces: [mismatch("x", slot("s9")), mismatch("z", slot("s1"))] };
+    const next = side([mismatch("x", slot("s9")), mismatch("z", slot("s1"))]);
     const { pairs } = checkNamespaces(old, next);
     expect(pairs.find((p) => p.old !== undefined)?.next?.namespace).toBe("erc7201:z");
   });
@@ -488,7 +489,7 @@ describe("checkNamespaces", () => {
       layout: layoutWith({ "erc7201:a": "A", "erc7201:b": "B" }),
       namespaces: [match("a"), match("b")],
     };
-    const next = { namespaces: [mismatch("b", slot("a")), match("a")] };
+    const next = side([mismatch("b", slot("a")), match("a")]);
     const { pairs } = checkNamespaces(old, next);
     expect(pairs.map((p) => [p.old?.namespace, p.next?.namespace, p.problem])).toEqual([
       ["erc7201:b", "erc7201:b", "moved"],
@@ -498,18 +499,87 @@ describe("checkNamespaces", () => {
 
   it("fails a new namespace that assigns several slots", () => {
     const conflict: NamespaceSlot = { ...unread("a"), status: "conflict" };
-    const checked = checkNamespaces(
-      { layout: layoutWith({}), namespaces: [] },
-      { namespaces: [conflict] },
-    );
+    const checked = checkNamespaces({ layout: layoutWith({}), namespaces: [] }, side([conflict]));
     expect(checked.result).toBe("fail");
     expect(checked.pairs[0].problem).toBe("conflict");
   });
 
   it("fails before it gives up: a failing namespace outranks an unread one", () => {
     const old = { layout: layoutWith({ "erc7201:a": "A", "erc7201:b": "B" }), namespaces: [] };
-    const next = { namespaces: [unread("a"), mismatch("b", slot("c"))] };
+    const next = side([unread("a"), mismatch("b", slot("c"))]);
     expect(checkNamespaces(old, next).result).toBe("fail");
+  });
+
+  it("cannot check old namespaces with no slots, as in an older record", () => {
+    const old = { layout: layoutWith({ "erc7201:a": "A" }) };
+    const checked = checkNamespaces(old, side([match("a")]));
+    expect(checked.result).toBe("unread");
+    expect(checked.pairs).toEqual([{ old: unread("a"), next: match("a"), problem: "unread" }]);
+  });
+
+  it("cannot check an old namespace missing from the slots given", () => {
+    const old = {
+      layout: layoutWith({ "erc7201:a": "A", "erc7201:b": "B" }),
+      namespaces: [match("a")],
+    };
+    const checked = checkNamespaces(old, side([match("a"), match("b")]));
+    expect(checked.result).toBe("unread");
+    expect(checked.pairs.map((p) => [p.old?.namespace, p.problem])).toEqual([
+      ["erc7201:a", undefined],
+      ["erc7201:b", "unread"],
+    ]);
+  });
+
+  it("still fails a problem in <new> when the old slots are unknown", () => {
+    const old = { layout: layoutWith({ "erc7201:a": "A" }) };
+    const checked = checkNamespaces(old, side([mismatch("a", slot("c"))]));
+    expect(checked.result).toBe("fail");
+  });
+
+  it.each([
+    ["no slots at all", undefined],
+    ["a slot for another namespace only", [match("b")]],
+  ])("cannot check a new namespace with %s", (_, slots) => {
+    // The new slot is unknown, so a moved namespace under the same annotation must not pass.
+    const old = side([match("a")]);
+    const layout = layoutWith({ "erc7201:a": "A", "erc7201:b": "B" });
+    const checked = checkNamespaces(old, { layout, namespaces: slots });
+    expect(checked.result).toBe("unread");
+    expect(checked.pairs.find((p) => p.old !== undefined)).toEqual({
+      old: match("a"),
+      next: unread("a"),
+      problem: "unread",
+    });
+  });
+
+  it.each([
+    ["a namespace the layout lacks", [mismatch("x", slot("y")), match("ghost")]],
+    ["a namespace twice", [mismatch("x", slot("y")), { ...match("x"), actual: slot("x") }]],
+  ])("refuses old slots with %s, which could hide a moved namespace", (_, slots) => {
+    // Old x really used y's slot and new x uses x's: the data moves. A stray
+    // entry holding x's slot would otherwise pair with new x and pass.
+    const old = { layout: layoutWith({ "erc7201:x": "X" }), namespaces: slots };
+    expect(() => checkNamespaces(old, side([match("x")]))).toThrow(LayoutIntegrityError);
+  });
+
+  it("refuses new slots that do not match the new layout", () => {
+    const next = { layout: layoutWith({}), namespaces: [match("x")] };
+    expect(() => checkNamespaces(side([]), next)).toThrow(
+      /new namespace slots do not fit its layout: erc7201:x is not in the layout/,
+    );
+  });
+
+  it.each([
+    ["a name a plain object resolves on its prototype", JSON.parse('{"__proto__": "X"}')],
+    ["a name with no formula", { constructor: "X" }],
+  ])("refuses a layout namespace with %s", (_, namespaces) => {
+    const old = { layout: { storage: [], types: {}, namespaces } as unknown as StorageLayout };
+    expect(() => checkNamespaces(old, side([]))).toThrow(/is not a storage location/);
+  });
+
+  it("refuses a hand-built slot that is not a bytes32, with a clean error", () => {
+    const bad = { ...match("x"), actual: "zz" };
+    expect(() => checkNamespaces(side([bad]), side([match("x")]))).toThrow(LayoutIntegrityError);
   });
 
   it("renames nothing when the slots already line up", async () => {
@@ -525,6 +595,14 @@ describe("checkNamespaces", () => {
     expect(checked.layout).toBe(c.layout);
   }, 60_000);
 });
+
+// A side whose layout holds exactly the namespaces it has slots for.
+function side(namespaces: NamespaceSlot[]) {
+  return {
+    layout: layoutWith(Object.fromEntries(namespaces.map((n) => [n.namespace, n.namespace]))),
+    namespaces,
+  };
+}
 
 // Synthetic layouts: only the namespace keys matter here, so members are a label.
 function layoutWith(namespaces: Record<string, string>): StorageLayout {
@@ -542,3 +620,26 @@ function mismatch(id: string, actual: string): NamespaceSlot {
 function unread(id: string): NamespaceSlot {
   return { namespace: `erc7201:${id}`, expected: slot(id), status: "unread" };
 }
+
+describe("namespaceSlots from existing compiler output", () => {
+  it("reads slots without another compile, as a build tool's output gives them", async () => {
+    // Only ASTs are needed; Hardhat 3 keys sources as project/...
+    const output = await solc.compile({
+      language: "Solidity",
+      sources: {
+        "project/contracts/C.sol": {
+          content: contract("x.main", `assembly { $.slot := ${slot("x.other")} }`),
+        },
+      },
+      settings: { outputSelection: { "*": { "": ["ast"] } } },
+    } as SolcInput);
+    expect(namespaceSlots(output, "project/contracts/C.sol:C", ["erc7201:x.main"])).toEqual([
+      {
+        namespace: "erc7201:x.main",
+        expected: slot("x.main"),
+        actual: slot("x.other"),
+        status: "mismatch",
+      },
+    ]);
+  });
+});

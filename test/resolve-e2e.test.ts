@@ -7,6 +7,7 @@
  * Nothing in the pipeline is mocked except the two network endpoints.
  */
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from "vitest";
+import { calculateERC7201StorageLocation } from "@openzeppelin/upgrades-core/dist/utils/erc7201.js";
 import type { SolcInput } from "@openzeppelin/upgrades-core";
 
 import { resolveProxyLayout } from "../src/resolve.js";
@@ -152,6 +153,32 @@ describe("resolveProxyLayout end to end", () => {
       "value@0/0",
       "owner@1/0",
       "active@1/20", // packed: the namespaced pass supplies real offsets
+    ]);
+    // The rest of the analysis travels with the record, for a later checkUpgrade.
+    expect(first.record.kind).toBe("transparent");
+    expect(first.kind).toBe("transparent");
+    expect(first.record.namespaces).toEqual([
+      {
+        namespace: "erc7201:box.main",
+        expected: calculateERC7201StorageLocation("box.main"),
+        status: "unread", // Box never assigns the slot
+      },
+    ]);
+  }, 120_000);
+
+  it("gives a beacon proxy the beacon kind, whatever its implementation implies", async () => {
+    vi.stubGlobal("fetch", explorerServing(V1));
+    const BEACON = "0x00000000000000000000000000000000000000cc";
+    const provider = makeMockChain({
+      code: { [IMPL]: await deployedCode(V1) },
+      beacons: { [PROXY]: BEACON },
+      beaconImplementations: { [BEACON]: IMPL },
+    });
+    const layout = await resolveProxyLayout(provider, PROXY, { explorer: { apiKey: "KEY" } });
+    expect([layout.beacon, layout.kind, layout.record.kind]).toEqual([
+      BEACON,
+      "beacon",
+      "transparent",
     ]);
   }, 120_000);
 

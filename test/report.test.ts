@@ -12,8 +12,15 @@ const B = "0xbbbb000000000000000000000000000000000000000000000000000000002200";
 
 // The grid for old and new slots, paired as the CLI pairs them.
 function grid(old: NamespaceSlot[], next: NamespaceSlot[]): string[] {
-  const layout = { storage: [], types: {}, namespaces: {} } as unknown as StorageLayout;
-  return namespaceLines(checkNamespaces({ layout, namespaces: old }, { namespaces: next }).pairs);
+  const side = (namespaces: NamespaceSlot[]) => ({
+    layout: {
+      storage: [],
+      types: {},
+      namespaces: Object.fromEntries(namespaces.map((n) => [n.namespace, []])),
+    } as unknown as StorageLayout,
+    namespaces,
+  });
+  return namespaceLines(checkNamespaces(side(old), side(next)).pairs);
 }
 
 function ns(id: string, expected: string, rest: Partial<NamespaceSlot>): NamespaceSlot {
