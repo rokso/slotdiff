@@ -161,7 +161,7 @@ describe("resolveProxyLayout end to end", () => {
       {
         namespace: "erc7201:box.main",
         expected: calculateERC7201StorageLocation("box.main"),
-        status: "unread", // Box never assigns the slot
+        status: "unused", // Box never assigns the slot
       },
     ]);
   }, 120_000);

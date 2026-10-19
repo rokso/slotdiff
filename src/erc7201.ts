@@ -34,9 +34,10 @@ export interface NamespaceSlot {
   /**
    * `match`: the code uses the annotated slot. `mismatch`: it uses `actual`
    * instead. `conflict`: it assigns different slots in different places.
-   * `unread`: no assignment was found, or one could not be evaluated.
+   * `unused`: no code assigns its slot (a namespace kept reserved).
+   * `unread`: an assignment could not be evaluated.
    */
-  status: "match" | "mismatch" | "conflict" | "unread";
+  status: "match" | "mismatch" | "conflict" | "unused" | "unread";
 }
 
 interface AstNode {
@@ -83,14 +84,24 @@ export function namespaceSlots(
       }
     });
   }
+  // An overridden function can still run (through `super` or `Base.f()`), so
+  // its assembly is set aside: it never gives a slot, but it keeps a namespace
+  // it assigns from passing as unused.
   const assemblies: AstNode[] = [];
+  const setAside: AstNode[] = [];
   for (const source of Object.values(output.sources ?? {})) {
     walk(source.ast as unknown as AstNode, (node) => {
       const sibling =
         node.nodeType === "ContractDefinition" &&
         node.contractKind !== "library" &&
         !bases.has(node.id as number);
-      if (sibling || overridden.has(node.id as number)) return false;
+      if (sibling) return false;
+      if (overridden.has(node.id as number)) {
+        walk(node, (inner) => {
+          if (inner.nodeType === "InlineAssembly") setAside.push(inner);
+        });
+        return false;
+      }
       if (node.nodeType === "InlineAssembly") assemblies.push(node);
     });
   }
@@ -98,6 +109,23 @@ export function namespaceSlots(
 
   // Struct id → every slot value assigned to a pointer of that struct (undefined: unreadable).
   const assigned = new Map<number, Array<string | undefined>>();
+  // Structs assigned a slot only in set-aside code, and whether any pointer
+  // that is not a struct (a mapping or an array) is assigned one.
+  const hidden = new Set<number>();
+  let untyped = false;
+  // Whether a struct without an annotation is placed at a known slot: it may
+  // hold a namespace's data under another name (a library's Layout, say).
+  const unannotated = (struct: number) => {
+    const node = byId.get(struct);
+    return node === undefined || getStorageLocationAnnotation(node as never) === undefined;
+  };
+  let stray = false;
+  for (const assembly of setAside) {
+    forEachSlotAssignment(assembly, byId, (struct) => {
+      if (struct === undefined) untyped = true;
+      else hidden.add(struct);
+    });
+  }
   for (const assembly of assemblies) {
     const refs = (assembly.externalReferences ?? []) as Array<{
       declaration: number;
@@ -115,7 +143,10 @@ export function namespaceSlots(
         }
         const pointer = byId.get(declarationAt(target.src));
         const struct = (pointer?.typeName as AstNode | undefined)?.referencedDeclaration;
-        if (typeof struct !== "number") continue;
+        if (typeof struct !== "number") {
+          untyped = true;
+          continue;
+        }
         const value = node.value as AstNode;
         const slot =
           value.nodeType === "YulLiteral"
@@ -123,6 +154,7 @@ export function namespaceSlots(
               ? normalize(value.value)
               : undefined
             : resolveDecl(ctx, byId.get(declarationAt(value.src)));
+        if (slot !== undefined && unannotated(struct)) stray = true;
         assigned.set(struct, [...(assigned.get(struct) ?? []), slot]);
       }
     });
@@ -130,17 +162,30 @@ export function namespaceSlots(
 
   return namespaces.map((namespace) => {
     const expected = calculateERC7201StorageLocation(namespace.slice("erc7201:".length));
-    const slots = [...byId.values()]
-      .filter(
-        (n) =>
-          n.nodeType === "StructDefinition" &&
-          bases.has(n.scope as number) &&
-          getStorageLocationAnnotation(n as never) === namespace,
-      )
-      .flatMap((n) => assigned.get(n.id!) ?? []);
+    const structs = [...byId.values()].filter(
+      (n) =>
+        n.nodeType === "StructDefinition" &&
+        bases.has(n.scope as number) &&
+        getStorageLocationAnnotation(n as never) === namespace,
+    );
+    const slots = structs.flatMap((n) => assigned.get(n.id!) ?? []);
     const known = [...new Set(slots.filter((s) => s !== undefined))];
+    if (slots.length === 0) {
+      // Unused only when nothing could be placing it: no assignment in
+      // set-aside code, none to a struct nested in it, none to an untyped
+      // pointer, none to a struct without an annotation at a known slot.
+      const nested = new Set(structs.flatMap((n) => [...nestedStructs(n, byId)]));
+      const own = new Set(structs.map((n) => n.id!));
+      const placed =
+        untyped ||
+        stray ||
+        [...hidden].some(unannotated) ||
+        [...own, ...nested].some((id) => hidden.has(id)) ||
+        [...nested].some((id) => !own.has(id) && assigned.has(id));
+      return { namespace, expected, status: placed ? "unread" : "unused" };
+    }
     if (known.length > 1) return { namespace, expected, status: "conflict" };
-    if (known.length === 0 || slots.includes(undefined)) {
+    if (slots.includes(undefined)) {
       return { namespace, expected, status: "unread" };
     }
     const actual = known[0];
@@ -324,7 +369,7 @@ function isSlot(value: unknown): value is NamespaceSlot {
     ? same
     : n.status === "mismatch"
       ? read && !same
-      : (n.status === "unread" || n.status === "conflict") && !read;
+      : (n.status === "unread" || n.status === "conflict" || n.status === "unused") && !read;
 }
 
 function problemOf({ old, next }: NamespacePair): NamespacePair["problem"] {
@@ -333,10 +378,48 @@ function problemOf({ old, next }: NamespacePair): NamespacePair["problem"] {
     return "moved";
   }
   if (next?.status === "mismatch") return "mismatch";
-  if ((old !== undefined && old.actual === undefined) || next?.status === "unread") {
+  // An unused namespace has no data of that version to move: compared by annotation, as OpenZeppelin does.
+  const unknown = (s?: NamespaceSlot) =>
+    s !== undefined && s.actual === undefined && s.status !== "unused";
+  if (unknown(old) || next?.status === "unread") {
     return "unread";
   }
   return undefined;
+}
+
+// Calls `found` with the struct id of each pointer assigned a `.slot` in
+// `assembly`, or undefined for a pointer that is not a struct.
+function forEachSlotAssignment(
+  assembly: AstNode,
+  byId: Map<number, AstNode>,
+  found: (struct: number | undefined) => void,
+): void {
+  const refs = (assembly.externalReferences ?? []) as Array<{ declaration: number; src: string }>;
+  walk(assembly.AST as AstNode, (node) => {
+    if (node.nodeType !== "YulAssignment") return;
+    for (const target of node.variableNames as AstNode[]) {
+      if (typeof target.name !== "string" || !target.name.endsWith(".slot")) continue;
+      const pointer = byId.get(refs.find((r) => r.src === target.src)?.declaration ?? -1);
+      const struct = (pointer?.typeName as AstNode | undefined)?.referencedDeclaration;
+      found(typeof struct === "number" ? struct : undefined);
+    }
+  });
+}
+
+// Every struct that `struct` holds, at any depth (in members, mappings and arrays).
+function nestedStructs(struct: AstNode, byId: Map<number, AstNode>): Set<number> {
+  const found = new Set<number>();
+  const visit = (node: AstNode) =>
+    walk(node, (n) => {
+      if (n.nodeType !== "UserDefinedTypeName") return;
+      const target = byId.get(n.referencedDeclaration as number);
+      if (target?.nodeType === "StructDefinition" && !found.has(target.id!)) {
+        found.add(target.id!);
+        visit(target);
+      }
+    });
+  visit(struct);
+  return found;
 }
 
 function same(a: string, b: string): boolean {

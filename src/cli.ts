@@ -13,7 +13,14 @@ import { relative, resolve } from "node:path";
 import { parseArgs, styleText } from "node:util";
 import { findBuildInfo } from "./build-info.js";
 import { readCode, readProxy, type EthProvider } from "./chain.js";
-import { checkLines, namespaceLines, plain, type Check, type Paint } from "./report.js";
+import {
+  checkLines,
+  namespaceLines,
+  plain,
+  unassignedCount,
+  type Check,
+  type Paint,
+} from "./report.js";
 import { errorCode, LayoutUnavailableError } from "./errors.js";
 import { canQueryExplorer } from "./explorer.js";
 import { rebuild } from "./resolve.js";
@@ -294,9 +301,13 @@ export async function run(argv: string[], io: CliIo): Promise<number> {
         ? { status: "fail", summary: "problems found in <new> (see above)" }
         : namespaces.result === "unread"
           ? { status: "skip", summary: "not checked: some slots could not be read (see above)" }
-          : grid.length > 0
-            ? { status: "pass", summary: "compared by the slot in code (see above)" }
-            : { status: "pass", summary: "match their annotations" }),
+          : {
+              status: "pass",
+              summary:
+                (grid.length > 0
+                  ? "compared by the slot in code (see above)"
+                  : "match their annotations") + unassigned(unassignedCount(namespaces.pairs)),
+            }),
     });
   }
 
@@ -341,6 +352,11 @@ export async function run(argv: string[], io: CliIo): Promise<number> {
       : `\n${paint(["bold", "green"], "Safe to upgrade.")}`,
   );
   return 0;
+}
+
+function unassigned(count: number): string {
+  if (count === 0) return "";
+  return `; ${count} not assigned in code, compared by annotation`;
 }
 
 function httpUrl(value: string, flag: string): URL {

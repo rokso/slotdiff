@@ -122,13 +122,14 @@ describe("parseRecord", () => {
     ["namespaces", slots([{ ...SLOT, actual: "0x" + "11".repeat(32) }])],
     ["namespaces", slots([{ ...UNREAD, actual: UNREAD.expected }])],
     ["namespaces", slots([{ ...CONFLICT, actual: CONFLICT.expected }])],
+    ["namespaces", slots([{ ...UNREAD, status: "unused", actual: UNREAD.expected }])],
   ])("refuses a malformed %s", (field, change) => {
     expect(() => parseRecord(saved(change))).toThrow(new RegExp(`malformed ${field}`));
   });
 
   it("loads the proxy kind and namespace slots when present, and records without them", () => {
     const upper = { ...SLOT, actual: SLOT.actual.toUpperCase().replace("0X", "0x") };
-    const full = { kind: "uups", ...slots([upper, UNREAD, CONFLICT]) };
+    const full = { kind: "uups", ...slots([upper, { ...UNREAD, status: "unused" }, CONFLICT]) };
     expect(parseRecord(saved(full))).toEqual(JSON.parse(JSON.stringify(record(full))));
     expect(parseRecord(saved(slots([])))).toEqual(record(slots([])));
     expect(parseRecord(saved())).toEqual(record());

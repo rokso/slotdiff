@@ -36,6 +36,22 @@ function namespaced(name: string, id: string, slot: string, fields = "uint256 sh
     function shutdown() external view returns (uint256) { return _s().shutdown; }
 }\n`;
 }
+// NewShut plus a namespace `x.reserved` kept for later: no code assigns it, or code at `slot`.
+function reserved(name: string, slot?: string): string {
+  const use =
+    slot === undefined
+      ? ""
+      : `function _r() private pure returns (R storage $) { assembly { $.slot := ${slot} } }
+    function r() external view returns (uint256) { return _r().a; }`;
+  // The first annotation is S's; R goes in front of it.
+  return namespaced(name, "x.shutdown.real", slotOf("x.shutdown.real")).replace(
+    "    /// @custom:storage-location",
+    `    /// @custom:storage-location erc7201:x.reserved
+    struct R { uint256 a; }
+    ${use}
+    /// @custom:storage-location`,
+  );
+}
 const SOURCES: Record<string, string> = {
   "src/V1.sol": `${header}contract V1 { uint256 public a; address public owner; }\n`,
   "src/V2.sol": `${header}contract V2 { uint256 public a; address public owner; uint256 public added; }\n`,
@@ -67,6 +83,10 @@ const SOURCES: Record<string, string> = {
     'bytes32 l = keccak256("x"); assembly { $.slot := l }',
   ),
   "src/NoNs.sol": `${header}contract NoNs { uint256 private x; }\n`,
+  // A reserved namespace: never assigned, then assigned where its annotation says, or elsewhere.
+  "src/Reserved.sol": reserved("Reserved"),
+  "src/ReservedUsed.sol": reserved("ReservedUsed", slotOf("x.reserved")),
+  "src/ReservedElsewhere.sol": reserved("ReservedElsewhere", slotOf("x.elsewhere")),
   "src/CtorAllowed.sol": `${header}contract CtorAllowed { uint256 public a; address public owner;
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() { a = 1; } }\n`,
@@ -375,6 +395,42 @@ describe("slotdiff CLI", () => {
       );
       expect(r.stdout).toMatch(/\nCould not check: some ERC-7201 slots could not be read.$/);
       expect(r.code).toBe(2);
+    }, 60_000);
+
+    // A namespace no code assigns is compared by its annotation, as OpenZeppelin does.
+    it.each([
+      ["never assigned on either side", "Reserved", "Reserved"],
+      ["assigned where its annotation says", "Reserved", "ReservedUsed"],
+    ])(
+      "passes a reserved namespace %s, counted in the summary",
+      async (_, old, next) => {
+        const r = await cli([old, next]);
+        expect(r.stdout).not.toContain("ERC-7201 namespaces");
+        expect(r.stdout).toContain(
+          "✓ ERC-7201 slots   match their annotations; 1 not assigned in code, compared by annotation",
+        );
+        expect(r.code).toBe(0);
+      },
+      60_000,
+    );
+
+    it("shows a namespace the new code stops assigning", async () => {
+      const r = await cli(["ReservedUsed", "Reserved"]);
+      expect(r.stdout).toMatch(
+        new RegExp(
+          `\\n  new  x\\.reserved +${short(slotOf("x.reserved"))} +none +· not assigned in code\\n`,
+        ),
+      );
+      expect(r.stdout).toContain(
+        "The new code no longer assigns this namespace; its data stays at",
+      );
+      expect(r.code).toBe(0);
+    }, 60_000);
+
+    it("fails a reserved namespace assigned elsewhere", async () => {
+      const r = await cli(["Reserved", "ReservedElsewhere"]);
+      expect(r.stdout).toContain("in a different slot than its annotation says");
+      expect(r.code).toBe(1);
     }, 60_000);
 
     it("leaves a namespace that is really gone to OpenZeppelin", async () => {

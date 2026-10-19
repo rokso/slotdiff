@@ -36,19 +36,31 @@ export function checkLines(checks: Check[], paint: Paint = plain): string[] {
   ]);
 }
 
+// A pair with nothing in question: no problem, and each side matches its
+// annotation or is not assigned at all, except data the new code stops assigning.
+// A side that is absent is not a problem here; OpenZeppelin reports a deleted namespace.
+function quiet({ old, next, problem }: NamespacePair): boolean {
+  const plain = (s?: NamespaceSlot) =>
+    s === undefined || s.status === "match" || s.status === "unused";
+  const dropped = old?.actual !== undefined && next?.status === "unused";
+  return problem === undefined && plain(old) && plain(next) && !dropped;
+}
+
+/** How many namespaces are compared by annotation alone because no code assigns them. */
+export function unassignedCount(pairs: NamespacePair[]): number {
+  return pairs.filter((p) => quiet(p) && [p.old, p.next].some((s) => s?.status === "unused"))
+    .length;
+}
+
 /**
  * A grid for each namespace whose slot is in question on either side: the
  * annotation, the slot it implies and the slot the code uses, for old and new,
- * with a sentence saying what that means. Namespaces that line up are left out.
+ * with a sentence saying what that means. Namespaces that line up, or that no
+ * code assigns on either side, are left out.
  */
 export function namespaceLines(pairs: NamespacePair[], paint: Paint = plain): string[] {
   const blocks = pairs
-    // A side that is absent is not a problem here; OpenZeppelin reports a deleted namespace.
-    .filter(
-      (p) =>
-        p.problem !== undefined ||
-        [p.old, p.next].some((s) => s !== undefined && s.status !== "match"),
-    )
+    .filter((p) => !quiet(p))
     .map((p) => {
       const fmt = formatter([p.old, p.next]);
       return {
@@ -103,16 +115,23 @@ function row(side: string, s: NamespaceSlot, fmt: (slot: string) => string): Row
     id: s.namespace.slice("erc7201:".length),
     implied: fmt(s.expected),
     inCode:
-      s.status === "conflict" ? "several" : s.actual !== undefined ? fmt(s.actual) : "not read",
+      s.status === "conflict"
+        ? "several"
+        : s.status === "unused"
+          ? "none"
+          : s.actual !== undefined
+            ? fmt(s.actual)
+            : "not read",
     mark: {
       match: "✓",
       mismatch: "✗ annotation does not match code",
       conflict: "✗ code uses more than one slot",
+      unused: "· not assigned in code",
       unread: "? slot in code not read",
     }[s.status],
-    tone: ({ match: "green", mismatch: "red", conflict: "red", unread: "yellow" } as const)[
-      s.status
-    ],
+    tone: (
+      { match: "green", mismatch: "red", conflict: "red", unused: "dim", unread: "yellow" } as const
+    )[s.status],
   };
 }
 
@@ -126,11 +145,20 @@ function meaning({ old, next, problem }: NamespacePair, fmt: (slot: string) => s
         "its data would be left behind. Keep the slot the deployed code uses, under an annotation that matches it."
       );
     case "mismatch":
-      return old === undefined
+      return old === undefined || old.status === "unused"
         ? "The new code keeps this namespace in a different slot than its annotation says. Fix one of the two before deploying."
         : "The storage did not move, but the new annotation does not match its code. Fix it before deploying.";
     case "unread":
-      return "The slot in code could not be read (computed at run time?), so this namespace could not be checked.";
+      return old !== undefined && old.actual === undefined && old.status !== "unused"
+        ? "The old slot is not known (not read from its code, or missing from an older record), so this namespace could not be checked."
+        : "The slot in the new code could not be read (set from a value slotdiff does not evaluate), so this namespace could not be checked.";
+  }
+  // The only unused case shown without a problem: the new code stops assigning old data.
+  if (next?.status === "unused" && old?.actual !== undefined) {
+    return BigInt(old.actual) === BigInt(old.expected)
+      ? `The new code no longer assigns this namespace; its data stays at ${fmt(old.actual)}.`
+      : `The new code no longer assigns this namespace; its data stays at ${fmt(old.actual)}, ` +
+          "not where its annotation points.";
   }
   return next !== undefined
     ? "Same slot in code on both sides: the storage did not move. Compared as one namespace."
