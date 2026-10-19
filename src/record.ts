@@ -11,6 +11,8 @@
 import type { StorageLayout } from "@openzeppelin/upgrades-core";
 import { isProvingMatch, type ProvingMatch } from "./bytecode.js";
 import { codeSha256, readChainId, readCode, type EthProvider } from "./chain.js";
+import { slotsMisfit, type NamespaceSlot } from "./erc7201.js";
+import type { SourceAnalysis } from "./reconstruct.js";
 import { LayoutIntegrityError, LayoutUnavailableError } from "./errors.js";
 
 /**
@@ -33,6 +35,17 @@ export interface LayoutRecord {
   source: "explorer" | "local-compile";
   recordedAt: string;
   layout: StorageLayout;
+  /**
+   * The proxy kind this code implies: `uups` when it has `upgradeTo` or
+   * `upgradeToAndCall`, else `transparent`. Pass `beacon` to the safety check
+   * instead when a beacon serves it. Absent in older records.
+   */
+  kind?: SourceAnalysis["kind"];
+  /**
+   * The slot each ERC-7201 namespace in `layout` really uses. Without it,
+   * `checkNamespaces` reports the record's namespaces as unread.
+   */
+  namespaces?: NamespaceSlot[];
 }
 
 const ADDRESS = /^0x[0-9a-f]{40}$/;
@@ -75,6 +88,11 @@ export function parseRecord(value: unknown, address?: string): LayoutRecord {
   ) {
     throw malformed("layout");
   }
+  if (r.kind !== undefined && r.kind !== "uups" && r.kind !== "transparent") {
+    throw malformed("kind");
+  }
+  if (slotsMisfit(r.layout, undefined) !== undefined) throw malformed("layout");
+  if (slotsMisfit(r.layout, r.namespaces) !== undefined) throw malformed("namespaces");
   if (typeof r.bytecodeMatch !== "string" || !isProvingMatch(r.bytecodeMatch)) {
     throw new LayoutIntegrityError(
       `The layout record for ${who} rests on a "${String(r.bytecodeMatch)}" match, which does ` +

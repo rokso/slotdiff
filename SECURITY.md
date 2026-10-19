@@ -18,6 +18,10 @@ For anyone reviewing slotdiff, or the alerts a supply-chain scanner raises about
 - **Environment:** `ETHERSCAN_API_KEY` (sent only to Etherscan), `XDG_CACHE_HOME` or `LOCALAPPDATA` for the cache directory, and, through Node's own color detection, `NO_COLOR`, `FORCE_COLOR`, `NODE_DISABLE_COLORS`, `TERM` and `COLORTERM`.
 - **Install:** slotdiff has no install scripts, and one dependency, `@openzeppelin/upgrades-core`. Two of its transitive dependencies (`keccak` and `secp256k1`, through `ethereumjs-util`) build optional native code at install (`node-gyp-build || exit 0`).
 
+## Saved records
+
+A layout record is bound to the deployed code by its hash, not to what it says about that code. Its `layout`, `kind` and `namespaces` decide the verdict and are trusted as written, so whoever can change a saved record (a pull request, a CI cache) can change the result. Review changes to records like code.
+
 ## No guarantee
 
 slotdiff comes without warranty and its authors accept no liability for any loss, including funds; see the README's "No guarantee" section and [LICENSE](LICENSE). Reporting a problem helps everyone, but a report does not make anyone liable for an upgrade.

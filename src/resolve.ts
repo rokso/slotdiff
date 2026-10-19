@@ -18,7 +18,7 @@ import {
 import { codeSha256, readChainId, readCode, readProxy, type EthProvider } from "./chain.js";
 import { LayoutUnavailableError } from "./errors.js";
 import { canQueryExplorer, fetchVerifiedSource, type ExplorerConfig } from "./explorer.js";
-import { reconstructLayout, type ReconstructedLayout } from "./reconstruct.js";
+import { reconstructLayout, type ProxyKind, type ReconstructedLayout } from "./reconstruct.js";
 import { parseRecord, type LayoutRecord } from "./record.js";
 import { getSolc, type SolcOptions } from "./solc.js";
 
@@ -74,6 +74,8 @@ export async function rebuild(
     source: "explorer",
     recordedAt: new Date().toISOString(),
     layout: rebuilt.layout,
+    kind: rebuilt.kind,
+    namespaces: rebuilt.namespaces,
   };
   return { record, analysis: rebuilt };
 }
@@ -83,6 +85,8 @@ export interface ProxyLayout {
   implementation: string;
   /** Set for a beacon proxy. */
   beacon?: string;
+  /** The proxy's kind, for `checkUpgrade`: `beacon` behind a beacon, else the record's. */
+  kind: ProxyKind;
   record: LayoutRecord;
 }
 
@@ -99,7 +103,8 @@ export async function resolveProxyLayout(
     );
   }
   const record = await resolveLayout(provider, state.implementation, options);
-  return { ...state, record };
+  // A rebuilt record always has its kind.
+  return { ...state, kind: state.beacon !== undefined ? "beacon" : record.kind!, record };
 }
 
 export interface LocalBuild {
@@ -109,6 +114,9 @@ export interface LocalBuild {
   layout: StorageLayout;
   deployedBytecode: string;
   immutableReferences?: ImmutableReferences;
+  /** From `analyzeSource`, so the record carries them (see `LayoutRecord`). */
+  kind?: LayoutRecord["kind"];
+  namespaces?: LayoutRecord["namespaces"];
 }
 
 export interface LocalBuildResult {
@@ -147,6 +155,8 @@ export async function proveLocalBuild(
     source: "local-compile",
     recordedAt: new Date().toISOString(),
     layout: build.layout,
+    ...(build.kind !== undefined ? { kind: build.kind } : {}),
+    ...(build.namespaces !== undefined ? { namespaces: build.namespaces } : {}),
   };
   // A record this returns must load back through parseRecord, so check it now.
   return { bytecodeMatch, record: parseRecord(JSON.parse(JSON.stringify(record)), lower) };

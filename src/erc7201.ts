@@ -11,6 +11,7 @@
  */
 
 import type { SolcOutput, StorageLayout } from "@openzeppelin/upgrades-core";
+import { LayoutIntegrityError } from "./errors.js";
 // Not exported from the package index; the package has no exports map, and
 // all exist since 1.46.0, the lowest version slotdiff accepts.
 import { getStorageLocationAnnotation } from "@openzeppelin/upgrades-core/dist/storage/namespace.js";
@@ -178,15 +179,16 @@ export interface NamespaceCheck {
  * OpenZeppelin goes by. An old and a new namespace are the same storage when
  * the code uses the same slot (under the same annotation first), failing that
  * when they share an annotation, and failing that when the new annotation
- * names the slot where the old data is.
+ * names the slot where the old data is. A namespace of either layout missing
+ * from that side's `namespaces` (or all of them, when it is absent) is unread.
  * Pass `layout` to `diffLayouts` in place of `old.layout`.
  */
 export function checkNamespaces(
-  old: { layout: StorageLayout; namespaces: NamespaceSlot[] },
-  next: { namespaces: NamespaceSlot[] },
+  old: { layout: StorageLayout; namespaces?: NamespaceSlot[] },
+  next: { layout: StorageLayout; namespaces?: NamespaceSlot[] },
 ): NamespaceCheck {
-  const unpaired = new Set(old.namespaces);
-  const pairs: NamespacePair[] = next.namespaces.map((n) => ({ next: n }));
+  const unpaired = new Set(slotsOf(old, "old"));
+  const pairs: NamespacePair[] = slotsOf(next, "new").map((n) => ({ next: n }));
   const sameSlot = (o: NamespaceSlot, n: NamespaceSlot) =>
     o.actual !== undefined && n.actual !== undefined && same(o.actual, n.actual);
   const rules: Array<(o: NamespaceSlot, n: NamespaceSlot) => boolean> = [
@@ -235,6 +237,84 @@ export function checkNamespaces(
         ? "unread"
         : "pass",
   };
+}
+
+/**
+ * One slot per namespace of `side.layout`. A namespace with no slot (a record
+ * from before slots were recorded) is unread, never left to OpenZeppelin's
+ * annotation-only match.
+ */
+function slotsOf(
+  side: { layout: StorageLayout; namespaces?: NamespaceSlot[] },
+  which: "old" | "new",
+): NamespaceSlot[] {
+  const misfit = slotsMisfit(side.layout, side.namespaces);
+  if (misfit !== undefined) {
+    throw new LayoutIntegrityError(
+      `The ${which} namespace slots do not fit its layout: ${misfit}.`,
+    );
+  }
+  const given = side.namespaces ?? [];
+  const seen = new Set(given.map((n) => n.namespace));
+  return [
+    ...given,
+    ...Object.keys(side.layout.namespaces ?? {})
+      .filter((namespace) => !seen.has(namespace))
+      .map((namespace): NamespaceSlot => ({
+        namespace,
+        expected: calculateERC7201StorageLocation(namespace.slice("erc7201:".length)),
+        status: "unread",
+      })),
+  ];
+}
+
+// `<formula>:<id>`, as OpenZeppelin keys namespaces. Never a name like
+// `__proto__`, which a plain object lookup would resolve on its prototype.
+const NAMESPACE_KEY = /^[\w.-]+:\S/;
+const SLOT = /^0x[0-9a-f]{64}$/i;
+
+/**
+ * Why `namespaces` cannot be the slots of `layout`'s namespaces, or undefined
+ * when they can (or are absent). A slot for a namespace the layout lacks, or a
+ * second one for the same namespace, could take another's place when
+ * namespaces are paired, so either is refused. Internal, shared with records.
+ */
+export function slotsMisfit(layout: StorageLayout, namespaces: unknown): string | undefined {
+  const names = Object.keys(layout.namespaces ?? {});
+  const odd = names.find((name) => !NAMESPACE_KEY.test(name));
+  if (odd !== undefined) return `${JSON.stringify(odd)} is not a storage location`;
+  if (namespaces === undefined) return undefined;
+  if (!Array.isArray(namespaces)) return "they are not a list";
+  const seen = new Set<string>();
+  for (const slot of namespaces) {
+    if (!isSlot(slot)) return "a slot is malformed";
+    if (!names.includes(slot.namespace)) return `${slot.namespace} is not in the layout`;
+    if (seen.has(slot.namespace)) return `${slot.namespace} appears twice`;
+    seen.add(slot.namespace);
+  }
+  return undefined;
+}
+
+// Well formed, and consistent with its status.
+function isSlot(value: unknown): value is NamespaceSlot {
+  const n = value as Partial<NamespaceSlot> | null;
+  if (
+    typeof n !== "object" ||
+    n === null ||
+    typeof n.namespace !== "string" ||
+    typeof n.expected !== "string" ||
+    !SLOT.test(n.expected) ||
+    (n.actual !== undefined && (typeof n.actual !== "string" || !SLOT.test(n.actual)))
+  ) {
+    return false;
+  }
+  const read = n.actual !== undefined;
+  const same = read && BigInt(n.actual!) === BigInt(n.expected);
+  return n.status === "match"
+    ? same
+    : n.status === "mismatch"
+      ? read && !same
+      : (n.status === "unread" || n.status === "conflict") && !read;
 }
 
 function problemOf({ old, next }: NamespacePair): NamespacePair["problem"] {
