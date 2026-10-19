@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- `checkUpgrade(old, next, options?)`: layout, ERC-7201 slots and safety rules in one verdict (`pass`, `fail` or `unchecked`), as the CLI runs them. The proxy kind comes from `old`.
+- Layout records keep the proxy `kind` and each namespace's slot (`namespaces`), so a saved record can stand in for `old`. Optional: older records still load.
+- `checkNamespaces`: a namespace with no slot is unread, never matched by annotation alone; slots that do not fit the layout are refused. **Breaking:** `next` needs its `layout`.
+- `SafetyReport.explain(color?)` and `NamespaceCheck.explain(color?)` (the CLI's namespace grid); `safety()` refuses an unknown `unsafeAllow` kind; `resolveProxyLayout` returns the proxy's `kind`; `proveLocalBuild` takes `kind` and `namespaces` for the record. New types: `UpgradeSide`, `UpgradeOptions`, `UpgradeCheck`.
+- `parseRecord` refuses a namespace key not of the form `<formula>:<id>`, and a malformed `kind` or `namespaces`.
+- **Breaking:** a contract missing from the compiler input throws a plain `Error` (was `LayoutIntegrityError`), as a wrong argument.
+
 ## 0.2.0-alpha.1
 
 - CLI: `slotdiff <old> <new>`, where each side is a contract in your build info or an address (a proxy, read as what it runs now, or an implementation; needs `--rpc` and `ETHERSCAN_API_KEY`). Checks the storage layout, the ERC-7201 slots and OpenZeppelin's safety rules for `<new>`, with the proxy kind taken from `<old>`'s implementation, so a UUPS implementation missing `upgradeToAndCall` fails. Exits 0 when every check passed, 1 when one failed, 2 when something could not be checked. `ETHERSCAN_API_KEY` is sent only to Etherscan, never to `--explorer-url`.

@@ -129,8 +129,8 @@ export interface SafetyOptions {
 export interface SafetyReport {
   ok: boolean;
   errors: SafetyError[];
-  /** OpenZeppelin's description of each error. */
-  explain(): string;
+  /** OpenZeppelin's description of each error; `color` (default true) adds terminal colors. */
+  explain(color?: boolean): string;
 }
 
 export interface SourceAnalysis {
@@ -174,6 +174,13 @@ async function analyze(
     kind: inferProxyKind(data, version) as SourceAnalysis["kind"],
     namespaces: namespaceSlots(output, contract, Object.keys(layout.namespaces ?? {})),
     safety({ kind, unsafeAllow = [] }) {
+      // OpenZeppelin ignores a kind it does not know, so a typo would accept nothing silently.
+      const unknown = unsafeAllow.find((k) => !SAFETY_ERROR_KINDS.includes(k));
+      if (unknown !== undefined) {
+        throw new Error(
+          `Unknown unsafeAllow error kind "${String(unknown)}". Known: ${SAFETY_ERROR_KINDS.join(", ")}.`,
+        );
+      }
       // A copy: OpenZeppelin appends to the array it is given.
       const opts = { kind, unsafeAllow: [...unsafeAllow] };
       // The deprecated kinds are never reported, so every error has a SafetyErrorKind.
@@ -181,7 +188,7 @@ async function analyze(
       return {
         ok: errors.length === 0,
         errors,
-        explain: () => new UpgradeableContractErrorReport(errors).explain(),
+        explain: (color?: boolean) => new UpgradeableContractErrorReport(errors).explain(color),
       };
     },
   };
@@ -213,6 +220,13 @@ async function validateContract(
     input,
     namespacedOutput,
   );
+  const colon = contract.lastIndexOf(":");
+  if (output.contracts?.[contract.slice(0, colon)]?.[contract.slice(colon + 1)] === undefined) {
+    throw new Error(
+      `${contract} is not in the compiler input. Name it as source.sol:Contract, with the ` +
+        `source path exactly as the input has it (Hardhat 3 starts it with project/).`,
+    );
+  }
   const version = runData[contract]?.version;
   if (version === undefined) {
     throw new LayoutIntegrityError(

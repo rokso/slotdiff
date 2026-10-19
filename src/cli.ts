@@ -13,8 +13,6 @@ import { relative, resolve } from "node:path";
 import { parseArgs, styleText } from "node:util";
 import { findBuildInfo } from "./build-info.js";
 import { readCode, readProxy, type EthProvider } from "./chain.js";
-import { diffLayouts } from "./diff.js";
-import { checkNamespaces } from "./erc7201.js";
 import { checkLines, namespaceLines, plain, type Check, type Paint } from "./report.js";
 import { errorCode, LayoutUnavailableError } from "./errors.js";
 import { canQueryExplorer } from "./explorer.js";
@@ -27,6 +25,7 @@ import {
   type SourceAnalysis,
 } from "./reconstruct.js";
 import { getSolc } from "./solc.js";
+import { checkUpgrade } from "./upgrade.js";
 
 const USAGE = `Usage: slotdiff <old> <new> [options]
 
@@ -265,15 +264,17 @@ export async function run(argv: string[], io: CliIo): Promise<number> {
     );
   }
 
-  // OpenZeppelin matches namespaces by annotation; slotdiff pairs them by the
-  // slot the code uses, and OpenZeppelin then compares the structs of each pair.
-  const namespaces = checkNamespaces(old.analysis, next.analysis);
+  // The kind comes from <old>, the proxy being upgraded: inferring it from <new>
+  // would miss a UUPS implementation that lost its upgrade function.
+  const upgrade = checkUpgrade({ ...old.analysis, kind: old.kind }, next.analysis, {
+    unsafeAllowRenames: values["unsafe-allow-renames"],
+    unsafeAllow,
+    skipSafety: !safety,
+  });
+  const { layout: report, namespaces, safety: safetyCheck } = upgrade;
   const grid = namespaceLines(namespaces.pairs, paint);
   if (grid.length > 0) io.stdout(`\n${grid.join("\n")}`);
 
-  const report = diffLayouts(namespaces.layout, next.analysis.layout, {
-    unsafeAllowRenames: values["unsafe-allow-renames"],
-  });
   const renames = values["unsafe-allow-renames"] ? " (renames accepted)" : "";
   const checks: Check[] = [
     report.ok
@@ -299,10 +300,7 @@ export async function run(argv: string[], io: CliIo): Promise<number> {
     });
   }
 
-  // The kind comes from <old>, the proxy being upgraded: inferring it from <new>
-  // would miss a UUPS implementation that lost its upgrade function.
   const accepted = unsafeAllow.length > 0 ? `; accepted: ${unsafeAllow.join(", ")}` : "";
-  const safetyCheck = safety ? next.analysis.safety({ kind: old.kind, unsafeAllow }) : undefined;
   checks.push(
     safetyCheck === undefined
       ? { name: "Safety rules", status: "skip", summary: "skipped (--no-safety)" }
@@ -322,16 +320,16 @@ export async function run(argv: string[], io: CliIo): Promise<number> {
   io.stdout(`\n${checkLines(checks, paint).join("\n")}`);
 
   // One verdict, so a passing check next to a failing one is never read as safe.
-  const problems = [
-    ...(report.ok ? [] : ["the storage layout is incompatible"]),
-    ...(namespaces.result === "fail" ? ["an ERC-7201 namespace fails the slot check"] : []),
-    ...(safetyCheck?.ok === false ? ["<new> breaks the safety rules"] : []),
-  ];
-  if (problems.length > 0) {
+  if (upgrade.result === "fail") {
+    const problems = [
+      ...(report.ok ? [] : ["the storage layout is incompatible"]),
+      ...(namespaces.result === "fail" ? ["an ERC-7201 namespace fails the slot check"] : []),
+      ...(safetyCheck?.ok === false ? ["<new> breaks the safety rules"] : []),
+    ];
     io.stdout(`\n${paint(["bold", "red"], "Not safe to upgrade:")} ${problems.join(" and ")}.`);
     return 1;
   }
-  if (namespaces.result === "unread") {
+  if (upgrade.result === "unchecked") {
     io.stdout(
       `\n${paint(["bold", "yellow"], "Could not check:")} some ERC-7201 slots could not be read.`,
     );
