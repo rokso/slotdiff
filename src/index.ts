@@ -40,6 +40,9 @@ export {
 export {
   layoutFromSource,
   analyzeSource,
+  analyzeBuild,
+  type BuildAnalysis,
+  type BuildCompiler,
   SAFETY_ERROR_KINDS,
   type SourceAnalysis,
   type SafetyOptions,
@@ -55,5 +58,5 @@ export {
   type ProvingMatch,
   type ImmutableReferences,
 } from "./bytecode.js";
-export { LayoutIntegrityError, LayoutUnavailableError } from "./errors.js";
-export type { SolcInput, StorageLayout } from "@openzeppelin/upgrades-core";
+export { IncompleteBuildError, LayoutIntegrityError, LayoutUnavailableError } from "./errors.js";
+export type { SolcInput, SolcOutput, StorageLayout } from "@openzeppelin/upgrades-core";

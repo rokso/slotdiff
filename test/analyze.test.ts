@@ -7,6 +7,7 @@ import { UpgradeableContractErrorReport, type SolcInput } from "@openzeppelin/up
 // From the public entry point: library users get the same check as the CLI.
 import { analyzeSource, type SafetyErrorKind } from "../src/index.js";
 import { getSolc, type SolcRunner } from "../src/solc.js";
+import { LayoutIntegrityError } from "../src/errors.js";
 
 const SOLC = "0.8.24+commit.e11b9ed9";
 const header = "// SPDX-License-Identifier: MIT\npragma solidity 0.8.24;\n";
@@ -101,9 +102,10 @@ describe("analyzeSource", () => {
 
   it("still calls out an abstract contract as such", async () => {
     const sources = { "src/C.sol": `${header}abstract contract C { uint256 a; }\n` };
-    await expect(analyzeSource(input(sources), solc, "src/C.sol:C")).rejects.toThrow(
-      /compiled to no bytecode/,
-    );
+    const err = await analyzeSource(input(sources), solc, "src/C.sol:C").catch((e: unknown) => e);
+    // An integrity error: no layout can be trusted for it, so callers never fall back.
+    expect(err).toBeInstanceOf(LayoutIntegrityError);
+    expect((err as Error).message).toMatch(/compiled to no bytecode/);
   }, 60_000);
 
   it.each(["bogus", "struct-definition"])(
