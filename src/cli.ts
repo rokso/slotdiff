@@ -322,7 +322,7 @@ export async function run(argv: string[], io: CliIo): Promise<number> {
       name: "ERC-7201 slots",
       ...(namespaces.result === "fail"
         ? { status: "fail", summary: "problems found in <new> (see above)" }
-        : namespaces.result === "unread"
+        : namespaces.result === "unchecked"
           ? { status: "skip", summary: "not checked: some slots could not be read (see above)" }
           : {
               status: "pass",

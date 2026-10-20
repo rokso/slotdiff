@@ -24,8 +24,6 @@ import {
   type StorageLayout,
   type ValidationRunData,
 } from "@openzeppelin/upgrades-core";
-// Not exported from the package index; the package has no exports map.
-import { errorKinds, type ValidationError } from "@openzeppelin/upgrades-core/dist/validate/run.js";
 import { compareDeployedBytecode, isProvingMatch, type ProvingMatch } from "./bytecode.js";
 import { namespaceSlots, type NamespaceSlot } from "./erc7201.js";
 import { IncompleteBuildError, LayoutIntegrityError, printable } from "./errors.js";
@@ -81,33 +79,32 @@ export async function reconstructLayout(
   };
 }
 
-/**
- * The layout of `contract` (`source.sol:Name`) in `input`, with no bytecode
- * proof. Only for sources whose provenance is already known, such as a
- * project's own build-info.
- */
-export async function layoutFromSource(
-  input: SolcInput,
-  solc: SolcRunner,
-  contract: string,
-): Promise<StorageLayout> {
-  return (await analyzeSource(input, solc, contract)).layout;
-}
-
 export type ProxyKind = ProxyDeployment["kind"];
+
+type ValidationError = ReturnType<typeof getErrors>[number];
 
 /**
  * OpenZeppelin's safety error kinds, without the deprecated struct-definition
- * and enum-definition, which the check never reports.
+ * and enum-definition, which the check never reports. Listed here, not taken
+ * from OpenZeppelin, so its releases cannot change this API unseen; a test
+ * compares the two.
  */
-export type SafetyErrorKind = Exclude<
-  ValidationError["kind"],
-  "struct-definition" | "enum-definition"
->;
+export const SAFETY_ERROR_KINDS = [
+  "state-variable-assignment",
+  "state-variable-immutable",
+  "external-library-linking",
+  "constructor",
+  "delegatecall",
+  "selfdestruct",
+  "missing-public-upgradeto",
+  "internal-function-storage",
+  "missing-initializer",
+  "missing-initializer-call",
+  "duplicate-initializer-call",
+  "incorrect-initializer-order",
+] as const;
 
-export const SAFETY_ERROR_KINDS: readonly SafetyErrorKind[] = errorKinds.filter(
-  (k): k is SafetyErrorKind => k !== "struct-definition" && k !== "enum-definition",
-);
+export type SafetyErrorKind = (typeof SAFETY_ERROR_KINDS)[number];
 
 export interface SafetyError {
   /** OpenZeppelin's error kind, such as `constructor`. */
@@ -151,7 +148,11 @@ export interface SourceAnalysis {
   safety(options: SafetyOptions): SafetyReport;
 }
 
-/** `layoutFromSource` plus OpenZeppelin's safety check, from one compile. */
+/**
+ * The layout of `contract` (`source.sol:Name`) in `input`, its ERC-7201 slots
+ * and OpenZeppelin's safety check, from one compile. No bytecode proof: only
+ * for sources whose provenance is already known, such as a project's own build info.
+ */
 export async function analyzeSource(
   input: SolcInput,
   solc: BuildCompiler,

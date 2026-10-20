@@ -13,7 +13,7 @@ import type { SolcInput } from "@openzeppelin/upgrades-core";
 import { resolveProxyLayout } from "../src/resolve.js";
 import { verifyRecord } from "../src/record.js";
 import { getSolc, type SolcRunner } from "../src/solc.js";
-import { layoutFromSource } from "../src/reconstruct.js";
+import { analyzeSource } from "../src/reconstruct.js";
 import { LayoutIntegrityError } from "../src/errors.js";
 import { diffLayouts } from "../src/diff.js";
 import { makeMockChain } from "./helpers/mock-chain.js";
@@ -111,7 +111,7 @@ function explorerServing(served: string | SolcInput) {
 
 // The "new" side: the same extraction pipeline, applied to the local source.
 async function localLayout(content: string) {
-  return layoutFromSource(input(content), solc, "contracts/Box.sol:Box");
+  return (await analyzeSource(input(content), solc, "contracts/Box.sol:Box")).layout;
 }
 
 beforeAll(async () => {
@@ -238,7 +238,7 @@ describe("resolveProxyLayout end to end", () => {
       basePath: "/project",
       includePaths: [],
     } as SolcInput;
-    const layout = await layoutFromSource(foundryInput, solc, "contracts/Box.sol:Box");
+    const layout = (await analyzeSource(foundryInput, solc, "contracts/Box.sol:Box")).layout;
     expect(layout).toEqual(await localLayout(V1));
   }, 120_000);
 
@@ -333,7 +333,7 @@ contract Box {
       },
       settings: { optimizer: { enabled: true, runs: 200 }, metadata: { bytecodeHash: "none" } },
     } as unknown as SolcInput;
-    const layout = await layoutFromSource(both, solc, "contracts/Box.sol:Box");
+    const layout = (await analyzeSource(both, solc, "contracts/Box.sol:Box")).layout;
     expect(layout.storage.map((s) => `${s.contract}.${s.label}:${s.type}`)).toEqual([
       "Box.a:t_uint256",
       "Box.dep:t_uint256",

@@ -13,7 +13,8 @@
 - CLI: namespaces with no problem that the code does not assign are left out of the grid, and the summary counts them ("N not assigned in code, compared by annotation"); an unread slot says which side could not be read.
 - CLI: an `<old>` address that is not an ERC-1967 or beacon proxy is refused (exit 2) unless `--old-implementation` says it is an implementation. In 0.2.0 it was taken as an implementation, so a proxy of another kind (a custom slot, a diamond) was compared as its own, nearly empty, code and could pass. **Breaking** for an `<old>` implementation address: add `--old-implementation`.
 - Text from an explorer or from verified source can no longer move the cursor or recolor the terminal: control characters are stripped from explorer messages and solc's errors, and verified source with control characters in its name, paths or text (tabs and line breaks aside) is refused (`LayoutUnavailableError`).
-- **Breaking:** a contract missing from the compiler input throws a plain `Error` (was `LayoutIntegrityError`), as a wrong argument; `NamespacePair.problem` adds `"dropped"`.
+- **Breaking:** a contract missing from the compiler input throws a plain `Error` (was `LayoutIntegrityError`), as a wrong argument; `NamespacePair.problem` adds `"dropped"`; `NamespaceCheck.result` says `"unchecked"` (was `"unread"`), as `UpgradeCheck.result` does; `layoutFromSource` is removed (use `(await analyzeSource(input, solc, contract)).layout`, at the same cost).
+- `SAFETY_ERROR_KINDS` and `SafetyErrorKind` are slotdiff's own list (a test compares it with OpenZeppelin's), so the published types no longer import an OpenZeppelin internal file.
 
 ## 0.2.0-alpha.1
 

@@ -572,7 +572,7 @@ describe("checkNamespaces", () => {
   ])("cannot check a namespace when %s is not read", (_, oldSlots, nextSlots) => {
     const old = { layout: layoutWith({ "erc7201:a": "A" }), namespaces: oldSlots };
     const checked = checkNamespaces(old, side(nextSlots));
-    expect(checked.result).toBe("unread");
+    expect(checked.result).toBe("unchecked");
     expect(checked.pairs[0].problem).toBe("unread");
   });
 
@@ -617,7 +617,7 @@ describe("checkNamespaces", () => {
   it("cannot check old namespaces with no slots, as in an older record", () => {
     const old = { layout: layoutWith({ "erc7201:a": "A" }) };
     const checked = checkNamespaces(old, side([match("a")]));
-    expect(checked.result).toBe("unread");
+    expect(checked.result).toBe("unchecked");
     expect(checked.pairs).toEqual([{ old: unread("a"), next: match("a"), problem: "unread" }]);
   });
 
@@ -627,7 +627,7 @@ describe("checkNamespaces", () => {
       namespaces: [match("a")],
     };
     const checked = checkNamespaces(old, side([match("a"), match("b")]));
-    expect(checked.result).toBe("unread");
+    expect(checked.result).toBe("unchecked");
     expect(checked.pairs.map((p) => [p.old?.namespace, p.problem])).toEqual([
       ["erc7201:a", undefined],
       ["erc7201:b", "unread"],
@@ -648,7 +648,7 @@ describe("checkNamespaces", () => {
     const old = side([match("a")]);
     const layout = layoutWith({ "erc7201:a": "A", "erc7201:b": "B" });
     const checked = checkNamespaces(old, { layout, namespaces: slots });
-    expect(checked.result).toBe("unread");
+    expect(checked.result).toBe("unchecked");
     expect(checked.pairs.find((p) => p.old !== undefined)).toEqual({
       old: match("a"),
       next: unread("a"),
@@ -697,7 +697,7 @@ describe("checkNamespaces", () => {
       "fail",
       "mismatch",
     ],
-    ["unused, then unreadable", [unused("a")], [unread("a")], "unread", "unread"],
+    ["unused, then unreadable", [unused("a")], [unread("a")], "unchecked", "unread"],
     // The deployed slot is known only while some code assigns it.
     [
       "assigned off its annotation, then unused",
