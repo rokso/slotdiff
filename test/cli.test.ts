@@ -83,6 +83,11 @@ const SOURCES: Record<string, string> = {
     'bytes32 l = keccak256("x"); assembly { $.slot := l }',
   ),
   "src/NoNs.sol": `${header}contract NoNs { uint256 private x; }\n`,
+  // OldShut's namespace kept, wrong annotation and all, but no code assigns it any more.
+  "src/ShutDropped.sol": `${header}contract ShutDropped {
+    /// @custom:storage-location erc7201:x.shutdown
+    struct S { uint256 shutdown; }
+}\n`,
   // A reserved namespace: never assigned, then assigned where its annotation says, or elsewhere.
   "src/Reserved.sol": reserved("Reserved"),
   "src/ReservedUsed.sol": reserved("ReservedUsed", slotOf("x.reserved")),
@@ -425,6 +430,17 @@ describe("slotdiff CLI", () => {
         "The new code no longer assigns this namespace; its data stays at",
       );
       expect(r.code).toBe(0);
+    }, 60_000);
+
+    it("fails dropping a namespace whose deployed annotation is wrong, while the slot is known", async () => {
+      const r = await cli(["OldShut", "ShutDropped"]);
+      expect(r.stdout).toContain(
+        `The new code stops assigning this namespace while its data is at ${short(slotOf("x.shutdown.real"))}`,
+      );
+      expect(r.stdout).toMatch(
+        /\nNot safe to upgrade: an ERC-7201 namespace fails the slot check.$/,
+      );
+      expect(r.code).toBe(1);
     }, 60_000);
 
     it("fails a reserved namespace assigned elsewhere", async () => {
