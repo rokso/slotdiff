@@ -36,7 +36,9 @@ jobs:
           # publishing alone needs 11.5.1+). No registry-url: trusted publishing needs no .npmrc.
           node-version: "24"
           check-latest: true
-      - run: pnpm install --frozen-lockfile
+      # No dependency install scripts in the job that can mint the publish token
+      # (keccak and secp256k1 only build optional native addons).
+      - run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Check npm supports staged publishing
         run: |
           npm --version
