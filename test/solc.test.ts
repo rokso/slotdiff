@@ -182,6 +182,25 @@ describe("getSolc input and concurrency", () => {
     expect(solc.path).toBe("/usr/bin/true");
   });
 
+  it.each([
+    [
+      "a long version that leaves the cache",
+      { longVersion: "0.0.1+commit.0/../../x", path: "solc" },
+    ],
+    ["a path with a directory", { longVersion: "0.0.1+commit.22222222", path: "../solc" }],
+  ])("refuses a build list entry with %s, before any download", async (_, entry) => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ builds: [{ ...entry, sha256: "0x00" }] }),
+      arrayBuffer: async () => new ArrayBuffer(0),
+    });
+    await expect(getSolc("0.0.1", { cacheDir }, fetchImpl)).rejects.toThrow(
+      new LayoutUnavailableError("The solc build list has a malformed entry for 0.0.1."),
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("refuses a build published as a zip archive, as unavailable", async () => {
     const fetchImpl = vi.fn().mockResolvedValue({
       ok: true,

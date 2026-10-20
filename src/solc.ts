@@ -169,6 +169,10 @@ async function findBuild(
   if (build === undefined) {
     throw new LayoutUnavailableError(`solc ${version} has no native ${platform} build.`);
   }
+  // Both become paths: a release is matched by prefix, so its long version comes from the list.
+  if (!SOLC_VERSION.test(build.longVersion) || !/^[\w.+-]+$/.test(build.path)) {
+    throw new LayoutUnavailableError(`The solc build list has a malformed entry for ${version}.`);
+  }
   // Old Windows releases (up to 0.7.1) ship as zip archives, not executables.
   if (build.path.endsWith(".zip")) {
     throw new LayoutUnavailableError(
