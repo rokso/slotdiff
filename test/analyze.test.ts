@@ -100,6 +100,16 @@ describe("analyzeSource", () => {
     60_000,
   );
 
+  // Verified source is someone else's text, and solc quotes it in its errors.
+  it("strips terminal escapes from the source solc quotes", async () => {
+    const sources = { "src/C.sol": `${header}contract C { uint256 a = \u001b[2K; }\n` };
+    const err = (await analyzeSource(input(sources), solc, "src/C.sol:C").catch(
+      (e: unknown) => e,
+    )) as Error;
+    expect(err.message).toContain("failed to compile");
+    expect(err.message).not.toContain("\u001b");
+  }, 60_000);
+
   it("still calls out an abstract contract as such", async () => {
     const sources = { "src/C.sol": `${header}abstract contract C { uint256 a; }\n` };
     const err = await analyzeSource(input(sources), solc, "src/C.sol:C").catch((e: unknown) => e);

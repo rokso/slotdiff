@@ -21,7 +21,7 @@ import {
   type Check,
   type Paint,
 } from "./report.js";
-import { errorCode, LayoutUnavailableError } from "./errors.js";
+import { errorCode, LayoutUnavailableError, printable } from "./errors.js";
 import { canQueryExplorer } from "./explorer.js";
 import { rebuild } from "./resolve.js";
 import {
@@ -258,7 +258,8 @@ export async function run(argv: string[], io: CliIo): Promise<number> {
     // The same side twice (e.g. a proxy against itself) is fetched and compiled once.
     next = positionals[1] === positionals[0] ? old : await readSide(positionals[1]);
   } catch (e) {
-    io.stderr(`Could not check: ${(e as Error).message}`);
+    // Messages can quote an explorer or verified source.
+    io.stderr(`Could not check: ${printable((e as Error).message)}`);
     return 2;
   }
 
@@ -418,9 +419,8 @@ function jsonRpcProvider(url: URL, fetchImpl: FetchLike): EthProvider {
       }
       if (body.error !== undefined) {
         // The server's text, without control characters (terminal escapes) and capped.
-        const message = String(body.error.message ?? "unknown error")
-          // eslint-disable-next-line no-control-regex
-          .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
+        const message = printable(String(body.error.message ?? "unknown error"))
+          .replace(/\s/g, " ")
           .slice(0, 300);
         throw new Error(`RPC ${method} failed: ${message}`);
       }

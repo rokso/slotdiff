@@ -11,6 +11,7 @@
 - `analyzeSource` checks its own compile as `analyzeBuild` does: it refuses an input source without `content` (such as `urls`), and a compiler whose version differs from the one the metadata names (`LayoutIntegrityError`).
 - `parseRecord` refuses a namespace key not of the form `<formula>:<id>`, and a malformed `kind` or `namespaces`.
 - CLI: namespaces with no problem that the code does not assign are left out of the grid, and the summary counts them ("N not assigned in code, compared by annotation"); an unread slot says which side could not be read.
+- Text from an explorer or from verified source can no longer move the cursor or recolor the terminal: control characters are stripped from explorer messages and solc's errors, and verified source with control characters in its name, paths or text (tabs and line breaks aside) is refused (`LayoutUnavailableError`).
 - **Breaking:** a contract missing from the compiler input throws a plain `Error` (was `LayoutIntegrityError`), as a wrong argument; `NamespacePair.problem` adds `"dropped"`.
 
 ## 0.2.0-alpha.1
