@@ -36,6 +36,16 @@ export class IncompleteBuildError extends Error {
 }
 
 /**
+ * Text from outside (an explorer, an RPC endpoint, solc quoting verified
+ * source) without control characters, so it cannot move the cursor or recolor
+ * a terminal. Tabs and line breaks stay.
+ */
+export function printable(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, " ");
+}
+
+/**
  * A network error's code (ECONNREFUSED, ENOTFOUND), never its message: fetch
  * quotes the URL in some messages, and URLs carry API keys.
  */

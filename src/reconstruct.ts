@@ -28,7 +28,7 @@ import {
 import { errorKinds, type ValidationError } from "@openzeppelin/upgrades-core/dist/validate/run.js";
 import { compareDeployedBytecode, isProvingMatch, type ProvingMatch } from "./bytecode.js";
 import { namespaceSlots, type NamespaceSlot } from "./erc7201.js";
-import { IncompleteBuildError, LayoutIntegrityError } from "./errors.js";
+import { IncompleteBuildError, LayoutIntegrityError, printable } from "./errors.js";
 import type { VerifiedSource } from "./explorer.js";
 import type { SolcRunner } from "./solc.js";
 
@@ -457,7 +457,7 @@ async function compileOrThrow(
   const errors = (output.errors ?? []).filter((e) => e.severity === "error");
   if (errors.length > 0) {
     throw new LayoutIntegrityError(
-      `solc ${solc.longVersion} failed to compile the ${what}: ${errors[0].formattedMessage}`,
+      `solc ${solc.longVersion} failed to compile the ${what}: ${printable(String(errors[0].formattedMessage))}`,
     );
   }
   return output;

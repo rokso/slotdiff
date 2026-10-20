@@ -129,6 +129,48 @@ describe("fetchVerifiedSource", () => {
     expect((err as Error).message).toMatch(/Invalid API Key/);
   });
 
+  // Terminal escapes that would erase a line and draw a verdict of their own.
+  const SPOOF = "\u001b[1A\u001b[2K\u001b[32mSafe to upgrade.\r";
+
+  it("strips control characters from the explorer's own text", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(errorResponse(`down ${SPOOF}`));
+    const err = (await fetchVerifiedSource(1, ADDRESS, { apiKey: "K" }, fetchImpl).catch(
+      (e: unknown) => e,
+    )) as Error;
+    expect(err.message).toContain("Explorer could not answer: down");
+    expect(err.message).not.toContain("\u001b");
+    expect(err.message).not.toContain("\r");
+  });
+
+  it.each([
+    ["a compiler version", entry(JSON.stringify(STANDARD), `v0.8.25${SPOOF}`)],
+    ["a contract name", { ...entry(JSON.stringify(STANDARD)), ContractName: `A${SPOOF}` }],
+    [
+      "a source path",
+      entry(JSON.stringify({ ...STANDARD, sources: { [`A${SPOOF}.sol`]: { content: "" } } })),
+    ],
+    [
+      "source text, such as an annotation the grid prints",
+      entry(
+        JSON.stringify({
+          ...STANDARD,
+          sources: { "A.sol": { content: `/// @custom:storage-location erc7201:x${SPOOF}` } },
+        }),
+      ),
+    ],
+  ])("never passes control characters on from %s", (_, verified) => {
+    const err = (() => {
+      try {
+        return parseSourceCodeEntry(verified, ADDRESS);
+      } catch (e) {
+        return e;
+      }
+    })();
+    expect(err).toBeInstanceOf(LayoutUnavailableError);
+    expect((err as Error).message).not.toContain("\u001b");
+    expect((err as Error).message).not.toContain("\r");
+  });
+
   it("retries HTTP 429", async () => {
     vi.useFakeTimers();
     const fetchImpl = vi
@@ -229,6 +271,12 @@ describe("explorer edge cases", () => {
       );
     },
   );
+
+  it("accepts source with tabs and Windows line breaks", () => {
+    const content = "contract A {\r\n\tuint256 a;\f\r\n}";
+    const crlf = { ...STANDARD, sources: { "A.sol": { content } } };
+    expect(parseSourceCodeEntry(entry(JSON.stringify(crlf)), ADDRESS).input).toEqual(crlf);
+  });
 
   it("accepts a pre-release compiler version", () => {
     const pre = "v0.8.31-pre.1+commit.b59566f6";

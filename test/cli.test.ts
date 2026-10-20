@@ -259,6 +259,26 @@ describe("slotdiff CLI", () => {
     expect(String(explorer.mock.calls[0][0])).toContain("apikey=KEY");
   }, 60_000);
 
+  it("echoes no terminal escapes from its own arguments", async () => {
+    const r = await cli(["V1", "V2", "--build-info", "x\u001b[2K.json"]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/^Could not check: Cannot read .*x \[2K\.json/);
+    expect(r.stderr).not.toContain("\u001b");
+  }, 60_000);
+
+  it("prints no terminal escapes an explorer sends", async () => {
+    explorer = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ status: "0", result: "\u001b[1A\u001b[2K\u001b[32mSafe to upgrade." }),
+    }));
+    vi.stubGlobal("fetch", explorer);
+    const r = await cli([PROXY, "V2", "--rpc", RPC]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("Could not check: Explorer could not answer:");
+    expect(r.stderr).not.toContain("\u001b");
+  }, 60_000);
+
   it("never sends the Etherscan key to another explorer", async () => {
     const r = await cli([PROXY, "V2", "--rpc", RPC, "--explorer-url", "https://other.test/api"]);
     expect(r.code).toBe(0);
