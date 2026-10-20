@@ -24,6 +24,18 @@ export class LayoutIntegrityError extends Error {
 }
 
 /**
+ * A build is missing output the analysis needs (an AST, metadata, a storage
+ * layout or bytecode). Yours to fix, by compiling again with them selected
+ * (`hardhat compile --force` once the outputs are configured, say).
+ */
+export class IncompleteBuildError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "IncompleteBuildError";
+  }
+}
+
+/**
  * A network error's code (ECONNREFUSED, ENOTFOUND), never its message: fetch
  * quotes the URL in some messages, and URLs carry API keys.
  */

@@ -10,6 +10,7 @@
 import {
   getErrors,
   getStorageLayout,
+  hashBytecode,
   inferProxyKind,
   isNamespaceSupported,
   makeNamespacedInput,
@@ -22,13 +23,12 @@ import {
   type SolcOutput,
   type StorageLayout,
   type ValidationRunData,
-  type Version,
 } from "@openzeppelin/upgrades-core";
 // Not exported from the package index; the package has no exports map.
 import { errorKinds, type ValidationError } from "@openzeppelin/upgrades-core/dist/validate/run.js";
 import { compareDeployedBytecode, isProvingMatch, type ProvingMatch } from "./bytecode.js";
 import { namespaceSlots, type NamespaceSlot } from "./erc7201.js";
-import { LayoutIntegrityError } from "./errors.js";
+import { IncompleteBuildError, LayoutIntegrityError } from "./errors.js";
 import type { VerifiedSource } from "./explorer.js";
 import type { SolcRunner } from "./solc.js";
 
@@ -49,6 +49,7 @@ const FULL_SELECTION = {
       "evm.bytecode.linkReferences",
       "evm.deployedBytecode.object",
       "evm.deployedBytecode.immutableReferences",
+      "metadata",
     ],
     "": ["ast"],
   },
@@ -76,7 +77,7 @@ export async function reconstructLayout(
     contract,
     compiler: source.solcLongVersion,
     bytecodeMatch,
-    ...(await analyze(input, output, solc, contract)),
+    ...(await analyzeBuild(input, output, solc)).contract(contract),
   };
 }
 
@@ -153,21 +154,173 @@ export interface SourceAnalysis {
 /** `layoutFromSource` plus OpenZeppelin's safety check, from one compile. */
 export async function analyzeSource(
   input: SolcInput,
-  solc: SolcRunner,
+  solc: BuildCompiler,
   contract: string,
 ): Promise<SourceAnalysis> {
   const selected = withOutputSelection(input, FULL_SELECTION);
-  return analyze(selected, await compileOrThrow(solc, selected, "source"), solc, contract);
+  const output = await compileOrThrow(solc, selected, "source");
+  return (await analyzeBuild(selected, output, solc)).contract(contract);
 }
 
-async function analyze(
+/** The compiler for OpenZeppelin's namespaced pass: a `SolcRunner`, or a build tool's. */
+export type BuildCompiler = Pick<SolcRunner, "longVersion" | "compile">;
+
+export interface BuildAnalysis {
+  /** The analysis of one contract in the build, `source.sol:Name`. */
+  contract(contract: string): SourceAnalysis;
+}
+
+/**
+ * `analyzeSource` for a build you already compiled, such as a build tool's,
+ * without compiling it again: one namespaced pass and one validation serve
+ * every contract in it. `output` must hold every source's `ast` and, for each
+ * contract, its `metadata`, `storageLayout` (an interface or library may lack
+ * it) and `evm.bytecode` (`object`, `linkReferences`); without them it throws
+ * `IncompleteBuildError`. The metadata proves `output` was compiled from
+ * `input`'s sources by `compiler`'s version (not with its settings).
+ */
+export async function analyzeBuild(
   input: SolcInput,
   output: SolcOutput,
-  solc: SolcRunner,
+  compiler: BuildCompiler,
+): Promise<BuildAnalysis> {
+  checkBuild(input, output, compiler.longVersion);
+  const runData = await validateBuild(input, output, compiler);
+  return { contract: (contract) => analyzeContract(runData, output, contract) };
+}
+
+interface AstNode {
+  nodeType?: string;
+  name?: unknown;
+  contractKind?: unknown;
+}
+
+interface CompiledContract {
+  metadata?: unknown;
+  storageLayout?: unknown;
+  evm?: { bytecode?: { object?: unknown; linkReferences?: unknown } };
+}
+
+/**
+ * The analysis reads layouts from `output` and edits `input` at the offsets in
+ * `output`'s ASTs, so the two must be one build, complete: an output from other
+ * sources could pass a changed layout, and one without an AST would leave every
+ * namespace unassigned, compared by annotation alone. Anything else is refused.
+ */
+function checkBuild(input: SolcInput, output: SolcOutput, longVersion: string): void {
+  if (output.sources === undefined && Object.hasOwn(output, "_format")) {
+    throw new Error(
+      "The compiler output is wrapped in a build info file; pass its output field " +
+        "(Hardhat 3 writes { _format, output } to <id>.output.json).",
+    );
+  }
+  const paths = Object.keys(input.sources);
+  const outputPaths = Object.keys(output.sources ?? {});
+  if (
+    paths.length !== outputPaths.length ||
+    paths.some((path) => !Object.hasOwn(output.sources, path))
+  ) {
+    throw new Error("The compiler output does not hold the same sources as the input.");
+  }
+  for (const path of paths) {
+    if (typeof (input.sources[path] as { content?: unknown }).content !== "string") {
+      throw new Error(`The compiler input has no content for ${path}.`);
+    }
+    const ast = output.sources[path].ast as { nodes?: AstNode[] } | undefined;
+    if (ast === undefined) {
+      throw new IncompleteBuildError(
+        `The compiler output has no ast for ${path}; it needs every source's ast.`,
+      );
+    }
+    for (const node of ast.nodes ?? []) {
+      if (node.nodeType !== "ContractDefinition") continue;
+      const name = `${path}:${String(node.name)}`;
+      const c = output.contracts?.[path]?.[String(node.name)] as CompiledContract | undefined;
+      if (c === undefined)
+        throw new IncompleteBuildError(`The compiler output has no contract output for ${name}.`);
+      // Neither can hold state, and some tools (Foundry) leave their layout out.
+      const stateless = node.contractKind === "interface" || node.contractKind === "library";
+      if (
+        typeof c.metadata !== "string" ||
+        (c.storageLayout === undefined && !stateless) ||
+        typeof c.evm?.bytecode?.object !== "string" ||
+        typeof c.evm.bytecode.linkReferences !== "object"
+      ) {
+        throw new IncompleteBuildError(
+          `The compiler output for ${name} lacks metadata, storageLayout or evm.bytecode ` +
+            `(object, linkReferences); compile with them in outputSelection.`,
+        );
+      }
+      proveSameBuild(input, path, name, c.metadata, longVersion);
+    }
+  }
+}
+
+function proveSameBuild(
+  input: SolcInput,
+  path: string,
+  name: string,
+  metadata: string,
+  longVersion: string,
+) {
+  let parsed: {
+    compiler?: { version?: unknown };
+    sources?: Record<string, { keccak256?: unknown }>;
+  };
+  try {
+    parsed = JSON.parse(metadata);
+  } catch {
+    throw new LayoutIntegrityError(`The metadata for ${name} is not JSON.`);
+  }
+  const [version, commit] = String(parsed.compiler?.version).split("+");
+  const [wanted, wantedCommit] = longVersion.split("+");
+  if (
+    version !== wanted ||
+    (commit !== undefined && wantedCommit !== undefined && commit !== wantedCommit)
+  ) {
+    throw new LayoutIntegrityError(
+      `${name} was compiled by solc ${String(parsed.compiler?.version)}, not ${longVersion}.`,
+    );
+  }
+  // Its own source at least: metadata that lists none would prove nothing.
+  const sources: Record<string, { keccak256?: unknown }> = { [path]: {}, ...parsed.sources };
+  for (const [source, { keccak256 }] of Object.entries(sources)) {
+    const content = (input.sources[source] as { content?: string } | undefined)?.content;
+    const hash =
+      content === undefined ? undefined : "0x" + hashBytecode(Buffer.from(content).toString("hex"));
+    if (hash !== keccak256) {
+      throw new LayoutIntegrityError(
+        `The compiler output for ${name} was not compiled from this input (${source} differs).`,
+      );
+    }
+  }
+}
+
+function analyzeContract(
+  runData: ValidationRunData,
+  output: SolcOutput,
   contract: string,
-): Promise<SourceAnalysis> {
-  const { data, version } = await validateContract(input, output, solc, contract);
-  const layout = getStorageLayout(data, version);
+): SourceAnalysis {
+  const colon = contract.lastIndexOf(":");
+  if (output.contracts?.[contract.slice(0, colon)]?.[contract.slice(colon + 1)] === undefined) {
+    throw new Error(
+      `${contract} is not in the compiler input. Name it as source.sol:Contract, with the ` +
+        `source path exactly as the input has it (Hardhat 3 starts it with project/).`,
+    );
+  }
+  const version = runData[contract]?.version;
+  if (version === undefined) {
+    throw new LayoutIntegrityError(
+      `${contract} compiled to no bytecode (an abstract contract or interface?); ` +
+        `cannot derive its layout.`,
+    );
+  }
+  // OZ looks the contract up by bytecode version and takes the first match, so
+  // two contracts with identical code (possible without a source hash) could
+  // swap layouts or safety errors. Listing the target first makes every lookup land on it.
+  const data: ValidationRunData = { [contract]: runData[contract], ...runData };
+  // A copy: OpenZeppelin's layout points into the run data that every call shares.
+  const layout = structuredClone(getStorageLayout(data, version));
   return {
     layout,
     // Typed as any ProxyKind, but only ever uups or transparent.
@@ -194,50 +347,31 @@ async function analyze(
   };
 }
 
-async function validateContract(
+async function validateBuild(
   input: SolcInput,
   output: SolcOutput,
-  solc: SolcRunner,
-  contract: string,
-): Promise<{ data: ValidationRunData; version: Version }> {
-  const solcVersion = solc.longVersion.split("+")[0];
+  compiler: BuildCompiler,
+): Promise<ValidationRunData> {
+  const solcVersion = compiler.longVersion.split("+")[0];
 
   let namespacedOutput: SolcOutput | undefined;
   if (isNamespaceSupported(solcVersion)) {
     let namespacedInput = makeNamespacedInput(input, output, solcVersion);
     namespacedInput = await trySanitizeNatSpec(namespacedInput, solcVersion);
     namespacedOutput = await compileOrThrow(
-      solc,
+      compiler,
       withOutputSelection(namespacedInput, LAYOUT_SELECTION),
       "namespaced pass",
     );
   }
 
-  const runData = validate(
+  return validate(
     output,
     solcInputOutputDecoder(input, output),
     solcVersion,
     input,
     namespacedOutput,
   );
-  const colon = contract.lastIndexOf(":");
-  if (output.contracts?.[contract.slice(0, colon)]?.[contract.slice(colon + 1)] === undefined) {
-    throw new Error(
-      `${contract} is not in the compiler input. Name it as source.sol:Contract, with the ` +
-        `source path exactly as the input has it (Hardhat 3 starts it with project/).`,
-    );
-  }
-  const version = runData[contract]?.version;
-  if (version === undefined) {
-    throw new LayoutIntegrityError(
-      `${contract} compiled to no bytecode (an abstract contract or interface?); ` +
-        `cannot derive its layout.`,
-    );
-  }
-  // OZ looks the contract up by bytecode version and takes the first match, so
-  // two contracts with identical code (possible without a source hash) could
-  // swap layouts or safety errors. Listing the target first makes every lookup land on it.
-  return { data: { [contract]: runData[contract], ...runData }, version };
 }
 
 /**
@@ -315,7 +449,7 @@ function embedsSourceHash(input: SolcInput): boolean {
 }
 
 async function compileOrThrow(
-  solc: SolcRunner,
+  solc: BuildCompiler,
   input: SolcInput,
   what: string,
 ): Promise<SolcOutput> {

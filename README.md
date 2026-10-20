@@ -191,6 +191,19 @@ if (check.result !== "pass") {
 
 The safety rules take the proxy kind from `old`, the proxy being upgraded, never from `next`: a UUPS implementation that lost its upgrade function would otherwise look transparent and pass. For a beacon proxy, pass `{ ...old, kind: "beacon" }`. `checkUpgrade` also takes `unsafeAllowRenames`, `unsafeAllow` (error kinds to accept, listed in `SAFETY_ERROR_KINDS`, on top of `@custom:oz-upgrades-unsafe-allow` in the source) and `skipSafety`. `unchecked` means nothing failed but an ERC-7201 slot could not be read (`check.namespaces.result` is `unread`). With `skipSafety`, `pass` covers the layout and slots only, and `check.safety` is absent. The pieces are there too: `checkNamespaces`, `diffLayouts` and the analysis's own `safety({ kind })`.
 
+### Reuse a build you already compiled
+
+A build tool has just compiled the project, so compiling it again only to analyze it is wasted time. `analyzeBuild` takes that compiler input and output and analyzes every contract in it from one more, much lighter pass (OpenZeppelin's namespaced layouts). The output needs every source's `ast` and each contract's `metadata`, `storageLayout` and `evm.bytecode` (`object`, `linkReferences`); an interface or library may lack a `storageLayout`. Ask for them in `outputSelection` (Hardhat 3 leaves out `metadata` and `storageLayout` by default, Hardhat 2 `storageLayout`; Foundry needs `extra_output = ["storageLayout"]`). Output missing any of these throws `IncompleteBuildError`, so a build tool can ask for a fresh compile. The metadata proves the output was compiled from these sources by this compiler version (not that it used the input's settings, so pass the input the build tool compiled): an output from an earlier build is refused, never half analyzed. Hardhat 3 wraps the output in `<id>.output.json`; pass its `output` field.
+
+```ts
+import { analyzeBuild, checkUpgrade, getSolc } from "slotdiff";
+
+const build = await analyzeBuild(input, output, await getSolc(solcLongVersion));
+const check = checkUpgrade(old, build.contract("project/contracts/Vault.sol:Vault"));
+```
+
+The third argument runs that pass: a `getSolc` compiler, or your build tool's own, as `{ longVersion, compile(input) }`.
+
 ### Keep records, skip the rebuild next time
 
 Rebuilding means fetching source and compiling. A `LayoutRecord` is plain JSON: store it wherever suits you (committed next to your deployments, a CI cache) and load it back with `verifyRecord`, which refuses it unless this chain still runs the exact code it was proven against.
@@ -270,7 +283,7 @@ slotdiff fails closed: it never treats "could not check" as "safe".
 - `LayoutUnavailableError`: no answer. Not a proxy, unverified source, explorer outage or rate limit, no compiler for the platform. Falling back to another source is reasonable.
 - `LayoutIntegrityError`: an answer that cannot be trusted. Source that does not compile to the deployed code, a weak match, a record from another chain or for other code, a record or analysis that contradicts itself (namespace slots that do not fit its layout). Never fall back on this one.
 
-Problems that are yours to fix throw a plain `Error`: a rejected explorer API key, a compiler binary that fails to run (for example the wrong architecture), a record in a format from a newer slotdiff, and wrong arguments, such as a contract that is not in the compiler input, an unknown proxy kind given to `checkUpgrade`, an unknown `unsafeAllow` kind, or `checkUpgrade` asked for the safety rules without an analysis of `next`.
+Problems that are yours to fix throw a plain `Error`, or `IncompleteBuildError` (an `Error`) for a build missing output `analyzeBuild` needs: a rejected explorer API key, a compiler binary that fails to run (for example the wrong architecture), a record in a format from a newer slotdiff, and wrong arguments, such as a contract that is not in the compiler input, an unknown proxy kind given to `checkUpgrade`, an unknown `unsafeAllow` kind, or `checkUpgrade` asked for the safety rules without an analysis of `next`.
 
 ## API
 
@@ -284,6 +297,7 @@ Problems that are yours to fix throw a plain `Error`: a rejected explorer API ke
 | `parseRecord(value, address?)` | Load a saved record, checked offline |
 | `layoutFromSource(input, solc, "file.sol:Name")` | Layout from standard-json input, including ERC-7201 namespaces. No proof |
 | `analyzeSource(input, solc, "file.sol:Name")` | The layout, proxy `kind`, ERC-7201 `namespaces` and `safety({ kind })` |
+| `analyzeBuild(input, output, compiler)` | The same for every contract of a build already compiled, with no second full compile |
 | `checkUpgrade(old, next, options?)` | Layout, ERC-7201 slots and safety rules in one verdict: `pass`, `fail` or `unchecked` |
 | `checkNamespaces(old, next)` | ERC-7201 namespaces paired by real slot; a moved one fails. `explain()` |
 | `findBuildInfo(root, contract, { file? })` | Your build info for a contract: input, compiler version, deployed code |
