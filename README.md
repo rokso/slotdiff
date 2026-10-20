@@ -183,7 +183,7 @@ if (check.result !== "pass") {
 }
 ```
 
-The safety rules take the proxy kind from `old`, the proxy being upgraded, never from `next`: a UUPS implementation that lost its upgrade function would otherwise look transparent and pass. For a beacon proxy, pass `{ ...old, kind: "beacon" }`. `checkUpgrade` also takes `unsafeAllowRenames`, `unsafeAllow` (error kinds to accept, listed in `SAFETY_ERROR_KINDS`, on top of `@custom:oz-upgrades-unsafe-allow` in the source) and `skipSafety`. `unchecked` means nothing failed but an ERC-7201 slot could not be read (`check.namespaces.result` is `unread`). With `skipSafety`, `pass` covers the layout and slots only, and `check.safety` is absent. The pieces are there too: `checkNamespaces`, `diffLayouts` and the analysis's own `safety({ kind })`.
+The safety rules take the proxy kind from `old`, the proxy being upgraded, never from `next`: a UUPS implementation that lost its upgrade function would otherwise look transparent and pass. For a beacon proxy, pass `{ ...old, kind: "beacon" }`. `checkUpgrade` also takes `unsafeAllowRenames`, `unsafeAllow` (error kinds to accept, listed in `SAFETY_ERROR_KINDS`, on top of `@custom:oz-upgrades-unsafe-allow` in the source) and `skipSafety`. `unchecked` means nothing failed but an ERC-7201 slot could not be read (`check.namespaces.result` is `unchecked` too, and that pair's `problem` is `unread`). With `skipSafety`, `pass` covers the layout and slots only, and `check.safety` is absent. The pieces are there too: `checkNamespaces`, `diffLayouts` and the analysis's own `safety({ kind })`.
 
 ### Reuse a build you already compiled
 
@@ -289,7 +289,6 @@ Problems that are yours to fix throw a plain `Error`, or `IncompleteBuildError` 
 | `proveLocalBuild(provider, address, build)` | A record from your own build, only when it is the deployed build |
 | `verifyRecord(provider, address, value)` | Load a saved record, checked against the chain |
 | `parseRecord(value, address?)` | Load a saved record, checked offline |
-| `layoutFromSource(input, solc, "file.sol:Name")` | Layout from standard-json input, including ERC-7201 namespaces. No proof |
 | `analyzeSource(input, solc, "file.sol:Name")` | The layout, proxy `kind`, ERC-7201 `namespaces` and `safety({ kind })` |
 | `analyzeBuild(input, output, compiler)` | The same for every contract of a build already compiled, with no second full compile |
 | `checkUpgrade(old, next, options?)` | Layout, ERC-7201 slots and safety rules in one verdict: `pass`, `fail` or `unchecked` |

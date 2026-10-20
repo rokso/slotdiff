@@ -84,7 +84,7 @@ export function checkUpgrade(
   const result =
     !layout.ok || namespaces.result === "fail" || safety?.ok === false
       ? "fail"
-      : namespaces.result === "unread"
+      : namespaces.result === "unchecked"
         ? "unchecked"
         : "pass";
   return { layout, namespaces, ...(safety !== undefined ? { safety } : {}), result };

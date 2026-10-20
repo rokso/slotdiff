@@ -38,7 +38,6 @@ export {
   type UpgradeSide,
 } from "./upgrade.js";
 export {
-  layoutFromSource,
   analyzeSource,
   analyzeBuild,
   type BuildAnalysis,

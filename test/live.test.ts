@@ -19,7 +19,7 @@ import type { SolcInput } from "@openzeppelin/upgrades-core";
 import { resolveProxyLayout, type ProxyLayout } from "../src/resolve.js";
 import { fetchVerifiedSource, type ExplorerConfig } from "../src/explorer.js";
 import { readChainId } from "../src/chain.js";
-import { layoutFromSource } from "../src/reconstruct.js";
+import { analyzeSource } from "../src/reconstruct.js";
 import { getSolc } from "../src/solc.js";
 import { diffLayouts } from "../src/diff.js";
 
@@ -87,7 +87,7 @@ describe.skipIf(!RPC || !PROXY || !(EXPLORER.apiKey || EXPLORER.apiUrl))(
 
     async function check(changed: SolcInput) {
       const solc = await getSolc(baseline.record.compiler!);
-      const layout = await layoutFromSource(changed, solc, baseline.record.contract);
+      const layout = (await analyzeSource(changed, solc, baseline.record.contract)).layout;
       return diffLayouts(baseline.record.layout, layout);
     }
 

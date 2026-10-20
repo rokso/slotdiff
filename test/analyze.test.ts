@@ -5,7 +5,8 @@
 import { describe, it, expect, beforeAll, vi } from "vitest";
 import { UpgradeableContractErrorReport, type SolcInput } from "@openzeppelin/upgrades-core";
 // From the public entry point: library users get the same check as the CLI.
-import { analyzeSource, type SafetyErrorKind } from "../src/index.js";
+import { analyzeSource, SAFETY_ERROR_KINDS, type SafetyErrorKind } from "../src/index.js";
+import { errorKinds } from "@openzeppelin/upgrades-core/dist/validate/run.js";
 import { getSolc, type SolcRunner } from "../src/solc.js";
 import { LayoutIntegrityError } from "../src/errors.js";
 
@@ -117,6 +118,15 @@ describe("analyzeSource", () => {
     expect(err).toBeInstanceOf(LayoutIntegrityError);
     expect((err as Error).message).toMatch(/compiled to no bytecode/);
   }, 60_000);
+
+  // Listed by slotdiff so an OpenZeppelin release cannot change the API unseen;
+  // this fails when one adds or drops a kind.
+  it("lists OpenZeppelin's error kinds, without the two deprecated ones", () => {
+    const deprecated = ["struct-definition", "enum-definition"];
+    expect([...SAFETY_ERROR_KINDS].sort()).toEqual(
+      errorKinds.filter((k) => !deprecated.includes(k)).sort(),
+    );
+  });
 
   it.each(["bogus", "struct-definition"])(
     "refuses an unsafeAllow kind it does not know (%s), which would accept nothing",

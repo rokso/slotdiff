@@ -218,8 +218,11 @@ export interface NamespaceCheck {
   layout: StorageLayout;
   /** Every namespace of either side, old and new paired when they are the same storage. */
   pairs: NamespacePair[];
-  /** `fail` when any pair has a problem other than `unread`; `unread` when a slot could not be read. */
-  result: "pass" | "fail" | "unread";
+  /**
+   * `fail` when any pair has a problem other than `unread`; `unchecked` when a
+   * slot could not be read (a pair's problem is `unread`), as in `UpgradeCheck`.
+   */
+  result: "pass" | "fail" | "unchecked";
   /** The CLI's namespace grid, with what each problem means; empty when nothing is worth showing. */
   explain(color?: boolean): string;
 }
@@ -284,7 +287,7 @@ export function checkNamespaces(
     result: problems.some((p) => p !== undefined && p !== "unread")
       ? "fail"
       : problems.includes("unread")
-        ? "unread"
+        ? "unchecked"
         : "pass",
     // Colored by default, as OpenZeppelin's reports are.
     explain: (color = true) =>
