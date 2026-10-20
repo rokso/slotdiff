@@ -122,30 +122,24 @@ Colors and the banner appear only on an interactive terminal, never in a pipe, a
 
 ```ts
 import { JsonRpcProvider } from "ethers";
-import {
-  diffLayouts,
-  findBuildInfo,
-  getSolc,
-  layoutFromSource,
-  resolveProxyLayout,
-} from "slotdiff";
+import { analyzeSource, checkUpgrade, findBuildInfo, getSolc, resolveProxyLayout } from "slotdiff";
 
 // Any object with send(method, params): an ethers JsonRpcProvider or Hardhat's network provider.
 const provider = new JsonRpcProvider(process.env.RPC_URL);
 const apiKey = process.env.ETHERSCAN_API_KEY;
 
-// 1. The layout of whatever the proxy runs now, proven against its deployed code.
+// 1. Whatever the proxy runs now: its layout and ERC-7201 slots, proven against its deployed code.
 const live = await resolveProxyLayout(provider, "0xProxy", { explorer: { apiKey } });
 
-// 2. The layout of the new version, from your build info (Foundry, Hardhat 2 or 3).
-const build = await findBuildInfo(process.cwd(), "src/Vault.sol:Vault");
-const solc = await getSolc(build.solcVersion);
-const next = await layoutFromSource(build.input, solc, build.contract);
+// 2. The new version, from your build info (Foundry, Hardhat 2 or 3).
+const build = await findBuildInfo(process.cwd(), "src/VaultV2.sol:VaultV2");
+const next = await analyzeSource(build.input, await getSolc(build.solcVersion), build.contract);
 
-// 3. Compare.
-const report = diffLayouts(live.record.layout, next);
-if (!report.ok) {
-  console.error(report.explain());
+// 3. The layout, the ERC-7201 slots and the safety rules, with the proxy's own kind.
+const check = checkUpgrade({ ...live.record, kind: live.kind }, next);
+if (check.result !== "pass") {
+  // "fail", or "unchecked" when an ERC-7201 slot could not be read: neither is a pass.
+  console.error(check.layout.explain(), check.namespaces.explain(), check.safety?.explain());
   process.exit(1);
 }
 ```
@@ -160,7 +154,7 @@ if (!report.ok) {
 
 With `findBuildInfo`, Hardhat 3's `project/` prefix is optional.
 
-`explain()` gives OpenZeppelin's report, for example:
+`check.layout.explain()` gives OpenZeppelin's report, for example:
 
 ```
 src/Vault.sol:7: Inserted `inserted`
@@ -169,9 +163,9 @@ src/Vault.sol:7: Inserted `inserted`
 
 The explorer defaults to Etherscan's v2 API, where one key covers every chain it indexes. For another Etherscan-compatible explorer, such as Blockscout, pass `{ apiUrl }` (a key is optional there).
 
-### Safety rules and ERC-7201 slots too
+### Two local builds
 
-`analyzeSource` is `layoutFromSource` plus OpenZeppelin's safety check and the slot each ERC-7201 namespace really uses, from one compile. `checkUpgrade` runs all three checks on two analyses and gives one verdict, as the command line does.
+`analyzeSource` gives a contract's layout, the slot each ERC-7201 namespace really uses and OpenZeppelin's safety check, from one compile. `checkUpgrade` runs all three checks on two analyses, or a record and an analysis, and gives one verdict, as the command line does.
 
 ```ts
 import { analyzeSource, checkUpgrade, findBuildInfo, getSolc } from "slotdiff";
