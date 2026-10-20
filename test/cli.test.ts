@@ -301,13 +301,40 @@ describe("slotdiff CLI", () => {
     expect(r.code).toBe(1);
   }, 60_000);
 
-  it("takes an address that is not a proxy as an implementation", async () => {
+  // A proxy slotdiff cannot read (a diamond, a custom slot) would otherwise be
+  // compared as its own, nearly empty, code and pass.
+  it("refuses an <old> address that is not a proxy unless told it is an implementation", async () => {
     const r = await cli([IMPL, "V2", "--rpc", RPC]);
+    expect(r.code).toBe(2);
+    expect(r.stdout).not.toContain("Safe to upgrade");
+    expect(r.stderr).toContain(`Could not check: ${IMPL} is not a proxy slotdiff can read`);
+    expect(r.stderr).toContain("pass --old-implementation");
+    expect(explorer).not.toHaveBeenCalled();
+  });
+
+  it("takes an <old> implementation address with --old-implementation", async () => {
+    const r = await cli([IMPL, "V2", "--rpc", RPC, "--old-implementation"]);
     expect(r.stderr).toBe("");
     expect(r.code).toBe(0);
     expect(r.stdout).toContain(
       `old  ${IMPL} (implementation)\n     src/V1.sol:V1 (verified source, exact match)`,
     );
+  }, 60_000);
+
+  it("refuses --old-implementation for a proxy, and for a local <old>", async () => {
+    const proxy = await cli([PROXY, "V2", "--rpc", RPC, "--old-implementation"]);
+    expect(proxy.code).toBe(2);
+    expect(proxy.stderr).toContain(`${PROXY} is a proxy, not an implementation`);
+    const local = await cli(["V1", "V2", "--old-implementation"]);
+    expect(local.code).toBe(2);
+    expect(local.stderr).toBe("--old-implementation needs <old> to be an address.");
+  });
+
+  it("still takes a <new> implementation address as it is", async () => {
+    const r = await cli(["V1", IMPL, "--rpc", RPC]);
+    expect(r.stderr).toBe("");
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain(`new  ${IMPL} (implementation)`);
   }, 60_000);
 
   it("exits 2 for an address with no code", async () => {

@@ -42,7 +42,7 @@ OpenZeppelin's safety rules for <new> (constructors, initializers, selfdestruct.
 Each side is either:
   a contract in this project's build info   src/Vault.sol:Vault, or Vault when unique
   an address                                a proxy (the implementation it runs now),
-                                            or an implementation
+                                            or for <new>, an implementation
 
 Options:
   --rpc <url>                 JSON-RPC endpoint, required when a side is an address
@@ -54,6 +54,8 @@ Options:
   --unsafe-allow <kinds>      Comma-separated safety errors to accept, e.g. constructor;
                               prefer @custom:oz-upgrades-unsafe-allow in the source
   --no-safety                 Skip the safety rules
+  --old-implementation        <old> is an implementation address, not a proxy; also
+                              for a proxy slotdiff cannot read (pass its implementation)
   -h, --help                  Show this help
   -v, --version               Show the version
 
@@ -117,6 +119,7 @@ export async function run(argv: string[], io: CliIo): Promise<number> {
         "unsafe-allow-renames": { type: "boolean" },
         "unsafe-allow": { type: "string" },
         "no-safety": { type: "boolean" },
+        "old-implementation": { type: "boolean" },
         help: { type: "boolean", short: "h" },
         version: { type: "boolean", short: "v" },
       },
@@ -167,6 +170,12 @@ export async function run(argv: string[], io: CliIo): Promise<number> {
     return 2;
   }
 
+  const oldImplementation = values["old-implementation"] === true;
+  if (oldImplementation && !ADDRESS.test(positionals[0])) {
+    io.stderr("--old-implementation needs <old> to be an address.");
+    return 2;
+  }
+
   const safety = !values["no-safety"];
   if (!safety && values["unsafe-allow"] !== undefined) {
     io.stderr("--unsafe-allow does nothing with --no-safety.");
@@ -212,10 +221,23 @@ export async function run(argv: string[], io: CliIo): Promise<number> {
 
   if (io.tty) io.stdout(`${await banner()}\n`);
 
-  const readSide = async (spec: string): Promise<Side> => {
+  const readSide = async (spec: string, side: "old" | "new"): Promise<Side> => {
     if (ADDRESS.test(spec)) {
-      // A proxy stands for what it runs now; any other address is an implementation.
+      // A proxy stands for what it runs now. <new> may be an implementation, but
+      // <old> only when said so: a proxy of a kind slotdiff cannot read (a
+      // diamond, a custom slot) would otherwise be compared as its own code.
       const proxy = await readProxy(provider!, spec);
+      if (side === "old" && (proxy === undefined) !== oldImplementation) {
+        // An address with no code is reported as such.
+        if (proxy === undefined) await readCode(provider!, spec);
+        throw new Error(
+          proxy === undefined
+            ? `${spec.toLowerCase()} is not a proxy slotdiff can read (no ERC-1967 implementation ` +
+                "or beacon slot is set). If it is an implementation, or a proxy of another kind " +
+                "given by its implementation's address, pass --old-implementation."
+            : `${spec.toLowerCase()} is a proxy, not an implementation: drop --old-implementation.`,
+        );
+      }
       const implementation = proxy?.implementation ?? spec.toLowerCase();
       if (!canQueryExplorer(explorer)) {
         await readCode(provider!, implementation); // a wrong address is reported as such first
@@ -254,9 +276,9 @@ export async function run(argv: string[], io: CliIo): Promise<number> {
   let old: Side;
   let next: Side;
   try {
-    old = await readSide(positionals[0]);
+    old = await readSide(positionals[0], "old");
     // The same side twice (e.g. a proxy against itself) is fetched and compiled once.
-    next = positionals[1] === positionals[0] ? old : await readSide(positionals[1]);
+    next = positionals[1] === positionals[0] ? old : await readSide(positionals[1], "new");
   } catch (e) {
     // Messages can quote an explorer or verified source.
     io.stderr(`Could not check: ${printable((e as Error).message)}`);
