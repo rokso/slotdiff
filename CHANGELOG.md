@@ -5,11 +5,11 @@
 - `checkUpgrade(old, next, options?)`: layout, ERC-7201 slots and safety rules in one verdict (`pass`, `fail` or `unchecked`), as the CLI runs them. The proxy kind comes from `old`.
 - Layout records keep the proxy `kind` and each namespace's slot (`namespaces`), so a saved record can stand in for `old`. Optional: older records still load.
 - `checkNamespaces`: a namespace missing from `namespaces` (an older record) is unread, never matched by annotation alone; slots that do not fit the layout are refused. **Breaking:** `next` needs its `layout`.
-- ERC-7201: a namespace with no `$.slot :=` assignment (kept reserved) is `unused` and compared by its annotation (unless the code places another struct at a known slot, or a mapping or an array pointer), instead of making every upgrade of such a contract exit 2. **Breaking:** `NamespaceSlot.status` adds `"unused"` (such namespaces were `unread`).
+- ERC-7201: a namespace with no `$.slot :=` assignment (kept reserved) is `unused` and compared by its annotation (unless the code places another struct at a known slot, or a mapping or an array pointer), instead of making every upgrade of such a contract exit 2. Dropping the last assignment of a namespace whose deployed annotation is wrong fails (`dropped`), while the real slot is still known. **Breaking:** `NamespaceSlot.status` adds `"unused"` (such namespaces were `unread`).
 - `SafetyReport.explain(color?)` and `NamespaceCheck.explain(color?)` (the CLI's namespace grid); `safety()` refuses an unknown `unsafeAllow` kind; `resolveProxyLayout` returns the proxy's `kind`; `proveLocalBuild` takes `kind` and `namespaces` for the record. New types: `UpgradeSide`, `UpgradeOptions`, `UpgradeCheck`.
 - `parseRecord` refuses a namespace key not of the form `<formula>:<id>`, and a malformed `kind` or `namespaces`.
 - CLI: namespaces with no problem that the code does not assign are left out of the grid, and the summary counts them ("N not assigned in code, compared by annotation"); an unread slot says which side could not be read.
-- **Breaking:** a contract missing from the compiler input throws a plain `Error` (was `LayoutIntegrityError`), as a wrong argument.
+- **Breaking:** a contract missing from the compiler input throws a plain `Error` (was `LayoutIntegrityError`), as a wrong argument; `NamespacePair.problem` adds `"dropped"`.
 
 ## 0.2.0-alpha.1
 

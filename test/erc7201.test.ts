@@ -698,6 +698,14 @@ describe("checkNamespaces", () => {
       "mismatch",
     ],
     ["unused, then unreadable", [unused("a")], [unread("a")], "unread", "unread"],
+    // The deployed slot is known only while some code assigns it.
+    [
+      "assigned off its annotation, then unused",
+      [mismatch("a", slot("b"))],
+      [unused("a")],
+      "fail",
+      "dropped",
+    ],
   ])("checks a namespace %s", (_, oldSlots, nextSlots, result, problem) => {
     const checked = checkNamespaces(side(oldSlots), side(nextSlots));
     expect([checked.result, checked.pairs[0].problem]).toEqual([result, problem]);

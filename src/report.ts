@@ -148,6 +148,12 @@ function meaning({ old, next, problem }: NamespacePair, fmt: (slot: string) => s
       return old === undefined || old.status === "unused"
         ? "The new code keeps this namespace in a different slot than its annotation says. Fix one of the two before deploying."
         : "The storage did not move, but the new annotation does not match its code. Fix it before deploying.";
+    case "dropped":
+      return (
+        `The new code stops assigning this namespace while its data is at ${fmt(old!.actual!)}, ` +
+        `not at ${fmt(old!.expected)} where its annotation points: a later version that follows ` +
+        "the annotation would miss it. Correct the annotation to match the data first."
+      );
     case "unread":
       return old !== undefined && old.actual === undefined && old.status !== "unused"
         ? "The old slot is not known (not read from its code, or missing from an older record), so this namespace could not be checked."
@@ -155,10 +161,7 @@ function meaning({ old, next, problem }: NamespacePair, fmt: (slot: string) => s
   }
   // The only unused case shown without a problem: the new code stops assigning old data.
   if (next?.status === "unused" && old?.actual !== undefined) {
-    return BigInt(old.actual) === BigInt(old.expected)
-      ? `The new code no longer assigns this namespace; its data stays at ${fmt(old.actual)}.`
-      : `The new code no longer assigns this namespace; its data stays at ${fmt(old.actual)}, ` +
-          "not where its annotation points.";
+    return `The new code no longer assigns this namespace; its data stays at ${fmt(old.actual)}.`;
   }
   return next !== undefined
     ? "Same slot in code on both sides: the storage did not move. Compared as one namespace."

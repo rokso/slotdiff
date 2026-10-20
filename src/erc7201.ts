@@ -200,11 +200,12 @@ export interface NamespacePair {
   next?: NamespaceSlot;
   /**
    * Why this pair fails the check: `<new>` assigns several slots (`conflict`),
-   * leaves the old data behind (`moved`), or keeps the data in place under an
-   * annotation that does not match (`mismatch`). `unread`: a slot could not be
-   * read, so the pair could not be checked.
+   * leaves the old data behind (`moved`), keeps the data in place under an
+   * annotation that does not match (`mismatch`), or stops assigning a namespace
+   * whose deployed annotation does not match its data (`dropped`). `unread`: a
+   * slot could not be read, so the pair could not be checked.
    */
-  problem?: "conflict" | "moved" | "mismatch" | "unread";
+  problem?: "conflict" | "moved" | "mismatch" | "dropped" | "unread";
 }
 
 export interface NamespaceCheck {
@@ -378,6 +379,9 @@ function problemOf({ old, next }: NamespacePair): NamespacePair["problem"] {
     return "moved";
   }
   if (next?.status === "mismatch") return "mismatch";
+  // Only the deployed code knows where the data really is; once no code assigns
+  // the namespace, a later version that follows the wrong annotation would pass.
+  if (old?.status === "mismatch" && next?.status === "unused") return "dropped";
   // An unused namespace has no data of that version to move: compared by annotation, as OpenZeppelin does.
   const unknown = (s?: NamespaceSlot) =>
     s !== undefined && s.actual === undefined && s.status !== "unused";

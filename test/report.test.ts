@@ -82,10 +82,10 @@ describe("namespaceLines", () => {
     );
   });
 
-  it("says when that data is not where its annotation points", () => {
+  it("explains a namespace dropped while its annotation does not match its data", () => {
     const lines = grid([ns("x", A, { status: "mismatch", actual: B })], [unused]);
-    expect(lines.at(-1)).toContain(
-      "its data stays at 0xbbbb…2200, not where its annotation points.",
+    expect(lines.at(-1)).toBe(
+      "       The new code stops assigning this namespace while its data is at 0xbbbb…2200, not at 0xaaaa…1100 where its annotation points: a later version that follows the annotation would miss it. Correct the annotation to match the data first.",
     );
   });
 
