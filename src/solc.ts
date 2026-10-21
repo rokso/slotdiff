@@ -14,9 +14,9 @@
 
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { access, chmod, mkdir, readdir, rename, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SolcInput, SolcOutput } from "@openzeppelin/upgrades-core";
 import { LayoutIntegrityError, LayoutUnavailableError } from "./errors.js";
@@ -210,9 +210,21 @@ async function download(
   await rename(tmp, dest);
 }
 
-function runSolc(path: string, input: SolcInput): Promise<SolcOutput> {
+// solc reads imports it is not given from its working directory, so it runs in
+// an empty one: verified source could otherwise import, and quote in an error,
+// any file under the caller's (an .env, say).
+async function runSolc(path: string, input: SolcInput): Promise<SolcOutput> {
+  const cwd = await mkdtemp(join(tmpdir(), "slotdiff-solc-"));
+  try {
+    return await runSolcIn(cwd, path, input);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+}
+
+function runSolcIn(cwd: string, path: string, input: SolcInput): Promise<SolcOutput> {
   return new Promise((resolve, reject) => {
-    const child = spawn(path, ["--standard-json"], { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(path, ["--standard-json"], { cwd, stdio: ["pipe", "pipe", "pipe"] });
     const out: Buffer[] = [];
     const err: Buffer[] = [];
     child.stdout.on("data", (d: Buffer) => out.push(d));

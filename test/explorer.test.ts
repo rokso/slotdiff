@@ -132,6 +132,20 @@ describe("fetchVerifiedSource", () => {
   // Terminal escapes that would erase a line and draw a verdict of their own.
   const SPOOF = "\u001b[1A\u001b[2K\u001b[32mSafe to upgrade.\r";
 
+  it("keeps the explorer's own text on one line, so it cannot draw a verdict below", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(
+        errorResponse("not verified\n\n✓ Storage layout   compatible\n\nSafe to upgrade."),
+      );
+    const err = (await fetchVerifiedSource(1, ADDRESS, { apiKey: "K" }, fetchImpl).catch(
+      (e: unknown) => e,
+    )) as Error;
+    expect(err.message).toBe(
+      "Explorer could not answer: not verified ✓ Storage layout compatible Safe to upgrade.",
+    );
+  });
+
   it("strips control characters from the explorer's own text", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(errorResponse(`down ${SPOOF}`));
     const err = (await fetchVerifiedSource(1, ADDRESS, { apiKey: "K" }, fetchImpl).catch(
@@ -149,6 +163,13 @@ describe("fetchVerifiedSource", () => {
       "a source path",
       entry(JSON.stringify({ ...STANDARD, sources: { [`A${SPOOF}.sol`]: { content: "" } } })),
     ],
+    [
+      "a source path with a line break",
+      entry(
+        JSON.stringify({ ...STANDARD, sources: { "A\n\nSafe to upgrade.sol": { content: "" } } }),
+      ),
+    ],
+    ["a contract name with a tab", { ...entry(JSON.stringify(STANDARD)), ContractName: "A\tB" }],
     [
       "source text, such as an annotation the grid prints",
       entry(
@@ -271,6 +292,13 @@ describe("explorer edge cases", () => {
       );
     },
   );
+
+  it("refuses sources given by urls, which solc would fetch itself", () => {
+    const urls = { ...STANDARD, sources: { "A.sol": { urls: ["file:///etc/hosts"] } } };
+    expect(() => parseSourceCodeEntry(entry(JSON.stringify(urls)), ADDRESS)).toThrow(
+      /not inline \(urls\)/,
+    );
+  });
 
   it("accepts source with tabs and Windows line breaks", () => {
     const content = "contract A {\r\n\tuint256 a;\f\r\n}";

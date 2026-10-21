@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { join } from "node:path";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
+import type { SolcInput } from "@openzeppelin/upgrades-core";
 import { getSolc } from "../src/solc.js";
 import { LayoutIntegrityError, LayoutUnavailableError } from "../src/errors.js";
 
@@ -215,4 +216,25 @@ describe("getSolc input and concurrency", () => {
     );
     expect(fetchImpl).toHaveBeenCalledTimes(1); // never downloads it
   });
+});
+
+// Verified source is someone else's: it must not reach files of the caller's.
+describe("getSolc sandbox", () => {
+  it("compiles in an empty directory, so an import cannot read the caller's files", async () => {
+    const decoy = `.slotdiff-decoy-${randomUUID()}`;
+    await writeFile(join(process.cwd(), decoy), "DECOY_SECRET=1\n");
+    try {
+      const solc = await getSolc("0.8.24+commit.e11b9ed9");
+      const output = await solc.compile({
+        language: "Solidity",
+        sources: { "A.sol": { content: `import "${decoy}"; contract A {}` } },
+        settings: { outputSelection: {} },
+      } as SolcInput);
+      const text = JSON.stringify(output.errors);
+      expect(text).toContain("File not found");
+      expect(text).not.toContain("DECOY_SECRET");
+    } finally {
+      await rm(join(process.cwd(), decoy));
+    }
+  }, 120_000);
 });
