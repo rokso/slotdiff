@@ -9,7 +9,7 @@ import { calculateERC7201StorageLocation } from "@openzeppelin/upgrades-core/dis
 import { analyzeSource } from "../src/reconstruct.js";
 import { checkNamespaces, namespaceSlots, type NamespaceSlot } from "../src/erc7201.js";
 import { diffLayouts } from "../src/diff.js";
-import { LayoutIntegrityError } from "../src/errors.js";
+import { LayoutIntegrityError, LayoutUnavailableError } from "../src/errors.js";
 import type { StorageLayout } from "@openzeppelin/upgrades-core";
 import { getSolc, type SolcRunner } from "../src/solc.js";
 
@@ -257,36 +257,72 @@ contract C is Base {
   ])(
     "is never claimed when code assigns a slot to %s",
     async (_, type) => {
-      const body = `function _p() internal pure returns (${type} storage $) { assembly { $.slot := 1 } }`;
+      // From a parameter: a known slot would stop the analysis (see below).
+      const body = `function _p(bytes32 s) internal pure returns (${type} storage $) { assembly { $.slot := s } }`;
       expect(await statusOf(body, "", false)).toBe("unread");
     },
     60_000,
   );
 
-  // Its data may live under another struct's name, which OpenZeppelin does not see either.
+  // OpenZeppelin's layout holds only the namespaces declared in the contract and
+  // its bases; storage placed through any other struct would change unseen.
   it.each([
     [
-      "a library's struct",
+      "a library's struct, next to an assigned namespace",
       `library L {
     struct Layout { uint256 a; }
-    bytes32 internal constant SLOT = ${slot("x.main")};
+    bytes32 internal constant SLOT = ${slot("x.lib")};
     function layout() internal pure returns (Layout storage $) { assembly { $.slot := SLOT } }
 }`,
-      "function a() external view returns (uint256) { return L.layout().a; }",
+      "function b() external view returns (uint256) { return L.layout().a; }",
+      true,
+      "L.Layout",
     ],
     [
       "a struct without an annotation",
       "",
       `struct T { uint256 a; }
     function _t() internal pure returns (T storage $) { assembly { $.slot := ${slot("x.other")} } }`,
+      false,
+      "C.T",
+    ],
+    [
+      "a struct nested in a namespace",
+      "",
+      `function _i() internal pure returns (Inner storage $) { assembly { $.slot := 1 } }`,
+      false,
+      "Base.Inner",
     ],
   ])(
-    "is never claimed when code places %s at a known slot",
-    async (_, extra, body) => {
-      expect(await statusOf(body, extra, false)).toBe("unread");
+    "refuses storage placed through %s at a known slot",
+    async (_, extra, body, getter, name) => {
+      await expect(statusOf(body, extra, getter)).rejects.toThrow(
+        new RegExp(
+          `keeps storage at a fixed slot through ${name.replace(".", "\\.")}, which is not`,
+        ),
+      );
     },
     60_000,
   );
+
+  // The diamond and Solidstate pattern: OpenZeppelin skips such a struct with a warning.
+  it("refuses a namespace declared in a library, whose fields no layout holds", async () => {
+    const content = `// SPDX-License-Identifier: MIT
+pragma solidity 0.8.24;
+library LibFoo {
+    /// @custom:storage-location erc7201:foo.storage
+    struct Layout { uint256 a; address b; }
+    bytes32 internal constant SLOT = ${slot("foo.storage")};
+    function layout() internal pure returns (Layout storage l) { assembly { l.slot := SLOT } }
+}
+contract C {
+    function setA(uint256 v) external { LibFoo.layout().a = v; }
+}
+`;
+    const err = await analyze(content).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(LayoutUnavailableError);
+    expect((err as Error).message).toContain("through LibFoo.Layout");
+  }, 60_000);
 
   it("is never claimed when an overridden function places a struct without an annotation", async () => {
     const content = `// SPDX-License-Identifier: MIT
@@ -443,8 +479,9 @@ contract Other {
     /// @custom:storage-location erc7201:x.main
     struct S { uint256 a; }
 }
-// Free, so its assembly counts; it assigns Other's struct, not C's.
-function otherS() pure returns (Other.S storage $) { assembly { $.slot := ${slot("y.main")} } }
+// Free, so its assembly counts; it assigns Other's struct, not C's (from a
+// parameter: a known slot would stop the analysis).
+function otherS(bytes32 s) pure returns (Other.S storage $) { assembly { $.slot := s } }
 `;
     const { namespaces } = await analyze(content);
     expect(namespaces[0].status).toBe("match");
