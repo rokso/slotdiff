@@ -126,6 +126,16 @@ describe("findBuildInfo", () => {
       await expect(findBuildInfo(root, "src/Vault.sol:Vault")).rejects.toThrow(/older than the/);
     });
 
+    // forge 1.8.3: `forge build --build-info`, an edit, then a plain `forge build`.
+    // Building again, even with --build-info, skips the unchanged files: only --force helps.
+    it("says how to get out of a stale build when newer builds hold no compiler input", async () => {
+      await put("out/build-info/a.json", foundry({ "src/Vault.sol": "old", "src/Base.sol": BASE }));
+      await put("out/build-info/b.json", { id: "b", source_id_to_path: { 0: "src/Vault.sol" } });
+      await expect(findBuildInfo(root, "src/Vault.sol:Vault")).rejects.toThrow(
+        /newer build info holds no compiler input.*`forge build --build-info --force`/,
+      );
+    });
+
     it("says a build of a moved or deleted target is gone", async () => {
       await put("out/build-info/a.json", foundry({ "src/Gone.sol": "x", "src/Base.sol": BASE }));
       await expect(findBuildInfo(root, "src/Gone.sol:Gone")).rejects.toThrow(/no longer on disk/);

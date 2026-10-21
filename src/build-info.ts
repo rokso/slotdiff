@@ -172,9 +172,15 @@ export async function findBuildInfo(
 
   if (fresh.length === 0) {
     throw new Error(
-      stale.length > 0
-        ? `Every build info holding ${contract} is older than the sources on disk. Build again.`
-        : `${contract} is no longer on disk (moved or deleted). Build again.`,
+      stale.length === 0
+        ? `${contract} is no longer on disk (moved or deleted). Build again.`
+        : withoutInput
+          ? // Forge then skips the unchanged files, so building again keeps the input out.
+            `Every build info holding ${contract} with its compiler input is older than the ` +
+            "sources on disk; newer build info holds no compiler input (built without " +
+            "`--build-info`). Run `forge build --build-info --force`, or set " +
+            "`build_info = true` in foundry.toml so every build keeps it."
+          : `Every build info holding ${contract} is older than the sources on disk. Build again.`,
     );
   }
 
