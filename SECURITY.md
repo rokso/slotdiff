@@ -12,9 +12,9 @@ Include what you ran (the command or code, the contracts or their shape) and wha
 
 For anyone reviewing slotdiff, or the alerts a supply-chain scanner raises about it:
 
-- **Network:** the explorer (Etherscan's v2 API, or `--explorer-url`) for verified source, the RPC endpoint you pass, and `binaries.soliditylang.org` for compilers, each checked against the published checksum. Nothing else; no telemetry.
-- **Processes:** it runs the native solc binary it downloaded, found in Hardhat's cache, or that a library caller names with `solc.resolvePath`.
-- **Files:** it reads your build info and sources. It writes only the compiler cache (`slotdiff/compilers` under your OS cache directory, or `cacheDir`).
+- **Network:** the explorer (Etherscan's v2 API, or `--explorer-url`) for verified source, the RPC endpoint you pass, and `binaries.soliditylang.org` for compilers (each download checked against the published checksum). Nothing else; no telemetry.
+- **Processes:** it runs the native solc binary it downloaded, found in Hardhat's cache, or that a library caller names with `solc.resolvePath`, each time in a new empty temporary directory, so verified source cannot import your files.
+- **Files:** it reads your build info and sources. It writes only the compiler cache (`slotdiff/compilers` under your OS cache directory, or `cacheDir`) and solc's empty working directory, removed after each compile.
 - **Environment:** `ETHERSCAN_API_KEY` (sent only to Etherscan), `XDG_CACHE_HOME` or `LOCALAPPDATA` for the cache directory, and, through Node's own color detection, `NO_COLOR`, `FORCE_COLOR`, `NODE_DISABLE_COLORS`, `TERM` and `COLORTERM`.
 - **Install:** slotdiff has no install scripts, and one dependency, `@openzeppelin/upgrades-core`. Two of its transitive dependencies (`keccak` and `secp256k1`, through `ethereumjs-util`) build optional native code at install (`node-gyp-build || exit 0`).
 

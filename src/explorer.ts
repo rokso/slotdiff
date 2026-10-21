@@ -115,9 +115,12 @@ async function requestWithRetry(url: string, fetchImpl: FetchLike): Promise<Sour
       return entry as SourceCodeEntry;
     }
 
+    // One line: a line break could draw a verdict of its own under the error.
     const detail = printable(
       String(typeof body.result === "string" ? body.result : (body.message ?? "unknown error")),
-    ).slice(0, 300);
+    )
+      .replace(/\s+/g, " ")
+      .slice(0, 300);
     // Before the key check: Etherscan's rate-limit message mentions the API key.
     if (RATE_LIMIT.test(detail)) {
       if (retry) {
@@ -176,9 +179,19 @@ export function parseSourceCodeEntry(entry: SourceCodeEntry, address: string): V
   // Names, paths and source text (annotations, quoted by solc) reach the
   // screen; real source holds no control characters but tabs and line breaks.
   const contractName = entry.ContractName ?? "";
-  const contents = Object.values(input.sources).map((s) => String(s.content ?? ""));
+  const sources = Object.values(input.sources) as Array<{ content?: unknown }>;
+  // Every source inline: solc would fetch `urls` itself.
+  if (sources.some((s) => typeof s?.content !== "string")) {
+    throw new LayoutUnavailableError(
+      `Contract ${address} is verified with sources that are not inline (urls); only content is read.`,
+    );
+  }
+  const contents = sources.map((s) => s.content as string);
   if (
-    [contractName, ...Object.keys(input.sources)].some((s) => printable(s) !== s) ||
+    // Names and paths are printed on one line: no whitespace but a space.
+    [contractName, ...Object.keys(input.sources)].some(
+      (s) => printable(s) !== s || /[^\S ]/.test(s),
+    ) ||
     contents.some((s) => CONTROL.test(s))
   ) {
     throw new LayoutUnavailableError(
