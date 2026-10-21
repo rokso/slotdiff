@@ -1,10 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.3.1
 
 ### Fixed
 
 - Foundry: after `forge build --build-info`, an edit and a plain `forge build`, the newer build info holds no compiler input and building again does not change that. slotdiff said "Build again"; it now says to run `forge build --build-info --force` or set `build_info = true`.
+- The `bin` path is `dist/bin.js`: npm 11 warned that it removed `./dist/bin.js` on publish (0.3.0 still installs its `slotdiff` command).
 
 ## 0.3.0
 
