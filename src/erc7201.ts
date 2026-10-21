@@ -12,7 +12,7 @@
 
 import type { SolcOutput, StorageLayout } from "@openzeppelin/upgrades-core";
 import { styleText } from "node:util";
-import { LayoutIntegrityError } from "./errors.js";
+import { LayoutIntegrityError, LayoutUnavailableError } from "./errors.js";
 import { namespaceLines, plain } from "./report.js";
 // Not exported from the package index; the package has no exports map, and
 // all exist since 1.46.0, the lowest version slotdiff accepts.
@@ -113,13 +113,10 @@ export function namespaceSlots(
   // that is not a struct (a mapping or an array) is assigned one.
   const hidden = new Set<number>();
   let untyped = false;
-  // Whether a struct without an annotation is placed at a known slot: it may
-  // hold a namespace's data under another name (a library's Layout, say).
   const unannotated = (struct: number) => {
     const node = byId.get(struct);
     return node === undefined || getStorageLocationAnnotation(node as never) === undefined;
   };
-  let stray = false;
   for (const assembly of setAside) {
     forEachSlotAssignment(assembly, byId, (struct) => {
       if (struct === undefined) untyped = true;
@@ -154,31 +151,45 @@ export function namespaceSlots(
               ? normalize(value.value)
               : undefined
             : resolveDecl(ctx, byId.get(declarationAt(value.src)));
-        if (slot !== undefined && unannotated(struct)) stray = true;
         assigned.set(struct, [...(assigned.get(struct) ?? []), slot]);
       }
     });
   }
 
-  return namespaces.map((namespace) => {
-    const expected = calculateERC7201StorageLocation(namespace.slice("erc7201:".length));
-    const structs = [...byId.values()].filter(
+  const structsOf = (namespace: string) =>
+    [...byId.values()].filter(
       (n) =>
         n.nodeType === "StructDefinition" &&
         bases.has(n.scope as number) &&
         getStorageLocationAnnotation(n as never) === namespace,
     );
+  // Storage placed through any other struct (a library's Layout, annotated or
+  // not, or a struct with no annotation) is in no layout OpenZeppelin builds,
+  // so a change to it would pass unseen. A slot passed in (StorageSlot) is not known.
+  const namespaced = new Set(namespaces.flatMap((n) => structsOf(n).map((s) => s.id!)));
+  for (const [id, slots] of assigned) {
+    if (namespaced.has(id) || slots.every((s) => s === undefined)) continue;
+    const struct = byId.get(id);
+    const scope = byId.get(struct?.scope as number)?.name;
+    throw new LayoutUnavailableError(
+      `${contract} keeps storage at a fixed slot through ${[scope, struct?.name].filter(Boolean).join(".")}, ` +
+        "which is not an ERC-7201 namespace of the contract or its bases (a @custom:storage-location " +
+        "struct declared there): its fields are in no layout slotdiff compares, so it cannot check them.",
+    );
+  }
+
+  return namespaces.map((namespace) => {
+    const expected = calculateERC7201StorageLocation(namespace.slice("erc7201:".length));
+    const structs = structsOf(namespace);
     const slots = structs.flatMap((n) => assigned.get(n.id!) ?? []);
     const known = [...new Set(slots.filter((s) => s !== undefined))];
     if (slots.length === 0) {
       // Unused only when nothing could be placing it: no assignment in
-      // set-aside code, none to a struct nested in it, none to an untyped
-      // pointer, none to a struct without an annotation at a known slot.
+      // set-aside code, none to a struct nested in it, none to an untyped pointer.
       const nested = new Set(structs.flatMap((n) => [...nestedStructs(n, byId)]));
       const own = new Set(structs.map((n) => n.id!));
       const placed =
         untyped ||
-        stray ||
         [...hidden].some(unannotated) ||
         [...own, ...nested].some((id) => hidden.has(id)) ||
         [...nested].some((id) => !own.has(id) && assigned.has(id));
