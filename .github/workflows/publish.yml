@@ -1,6 +1,6 @@
 name: Publish
 
-# Run by hand: `gh workflow run publish.yml -f dist-tag=alpha`. npm trusts
+# Run by hand: `gh workflow run publish.yml -f dist-tag=latest`. npm trusts
 # this workflow through trusted publishing (OIDC), so no npm token is stored,
 # and the package gets a provenance attestation linking it to this repository
 # and commit. It only stages the release: nothing is public until a maintainer
