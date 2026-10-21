@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Foundry: after `forge build --build-info`, an edit and a plain `forge build`, the newer build info holds no compiler input and building again does not change that. slotdiff said "Build again"; it now says to run `forge build --build-info --force` or set `build_info = true`.
+
 ## 0.3.0
 
 ### Fixed
