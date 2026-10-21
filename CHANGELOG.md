@@ -2,22 +2,37 @@
 
 ## Unreleased
 
-- `analyzeBuild(input, output, compiler)`: `analyzeSource` for a build already compiled (a build tool's), with no second full compile; one namespaced pass serves every contract. Its `metadata` must prove the output was compiled from those sources by that compiler, so output from another build is refused (`LayoutIntegrityError`); incomplete output throws the new `IncompleteBuildError`.
+### Fixed
+
+These were in 0.2.0 (the solc one since 0.1.0); upgrade if you rely on the CLI or check verified source.
+
+- CLI: an `<old>` address that is not an ERC-1967 or beacon proxy was taken as an implementation, so a proxy of another kind (a custom slot, a diamond) was compared as its own, nearly empty, code and could pass. It is now refused (exit 2) unless `--old-implementation` says it is an implementation.
+- Storage placed at a fixed slot through a struct that is not an ERC-7201 namespace of the contract or its bases (a namespace declared in a library, as in the diamond and Solidstate pattern, or a struct with no annotation) is left out of OpenZeppelin's layout with only a warning, so a change to it passed. It now stops the analysis with `LayoutUnavailableError` (exit 2).
+- solc ran in the caller's directory, so verified source could `import` a file under it (an `.env`, say) and solc would quote its first line in the compile error. It now runs in a new empty directory, and verified source given by `urls` instead of inline `content` is refused.
+- Text from an explorer or from verified source could move the cursor, recolor the terminal or draw lines of its own (a fake "Safe to upgrade." under the error). Control characters are stripped from solc's errors, explorer messages are kept on one line, and verified source with control characters in its name, paths or text (tabs and line breaks in text aside), or any whitespace but a space in its name and paths, is refused (`LayoutUnavailableError`).
+
+### Breaking
+
+- CLI: an `<old>` implementation address needs `--old-implementation` (above).
+- `layoutFromSource` is removed: use `(await analyzeSource(input, solc, contract)).layout`, at the same cost.
+- `NamespaceCheck.result` says `"unchecked"` (was `"unread"`), as `UpgradeCheck.result` does. New union members: `NamespaceSlot.status` `"unused"` (such namespaces were `unread`), `NamespacePair.problem` `"dropped"`.
+- `checkNamespaces`: `next` needs its `layout`.
+- Plain `Error` (was `LayoutIntegrityError`), as wrong arguments: a contract missing from the compiler input, an input source without `content`. `safety()` throws on an unknown `unsafeAllow` kind (OpenZeppelin ignored it).
+
+### Added
+
 - `checkUpgrade(old, next, options?)`: layout, ERC-7201 slots and safety rules in one verdict (`pass`, `fail` or `unchecked`), as the CLI runs them. The proxy kind comes from `old`.
-- Layout records keep the proxy `kind` and each namespace's slot (`namespaces`), so a saved record can stand in for `old`. Optional: older records still load.
-- `checkNamespaces`: a namespace missing from `namespaces` (an older record) is unread, never matched by annotation alone; slots that do not fit the layout are refused. **Breaking:** `next` needs its `layout`.
-- ERC-7201: a namespace with no `$.slot :=` assignment (kept reserved) is `unused` and compared by its annotation (unless the code places a mapping or an array pointer), instead of making every upgrade of such a contract exit 2. Dropping the last assignment of a namespace whose deployed annotation is wrong fails (`dropped`), while the real slot is still known. **Breaking:** `NamespaceSlot.status` adds `"unused"` (such namespaces were `unread`).
-- `SafetyReport.explain(color?)` and `NamespaceCheck.explain(color?)` (the CLI's namespace grid); `safety()` refuses an unknown `unsafeAllow` kind; `resolveProxyLayout` returns the proxy's `kind`; `proveLocalBuild` takes `kind` and `namespaces` for the record. New types: `SolcOutput`, `UpgradeSide`, `UpgradeOptions`, `UpgradeCheck`, `BuildAnalysis`, `BuildCompiler`.
-- `analyzeSource` checks its own compile as `analyzeBuild` does: it refuses an input source without `content` (such as `urls`), and a compiler whose version differs from the one the metadata names (`LayoutIntegrityError`).
-- `parseRecord` refuses a namespace key not of the form `<formula>:<id>`, and a malformed `kind` or `namespaces`.
-- CLI: namespaces with no problem that the code does not assign are left out of the grid, and the summary counts them ("N not assigned in code, compared by annotation"); an unread slot says which side could not be read.
-- CLI: an `<old>` address that is not an ERC-1967 or beacon proxy is refused (exit 2) unless `--old-implementation` says it is an implementation. In 0.2.0 it was taken as an implementation, so a proxy of another kind (a custom slot, a diamond) was compared as its own, nearly empty, code and could pass. **Breaking** for an `<old>` implementation address: add `--old-implementation`.
-- Storage placed at a fixed slot through a struct that is not an ERC-7201 namespace of the contract or its bases (a namespace declared in a library, the diamond and Solidstate pattern, or a struct with no annotation) stops the analysis with `LayoutUnavailableError` (exit 2). OpenZeppelin leaves such structs out of the layout with a warning, so in 0.2.0 a change to them passed.
-- solc runs in a new empty directory. Since 0.1.0 it ran in the caller's, so verified source could `import` a file under it (an `.env`, say) and solc would quote its first line in the compile error. Verified source given by `urls` instead of inline `content` is refused.
-- Text from an explorer or from verified source can no longer move the cursor, recolor the terminal or draw lines of its own: control characters are stripped from solc's errors, explorer messages are kept on one line, and verified source with control characters in its name, paths or text (tabs and line breaks in text aside), or any whitespace but a space in its name and paths, is refused (`LayoutUnavailableError`).
-- `getSolc` refuses a malformed entry in solc's build list before it becomes a path. The publish workflow installs dependencies without their install scripts; a weekly workflow tests against the newest OpenZeppelin upgrades-core 1.x.
-- **Breaking:** a contract missing from the compiler input throws a plain `Error` (was `LayoutIntegrityError`), as a wrong argument; `NamespacePair.problem` adds `"dropped"`; `NamespaceCheck.result` says `"unchecked"` (was `"unread"`), as `UpgradeCheck.result` does; `layoutFromSource` is removed (use `(await analyzeSource(input, solc, contract)).layout`, at the same cost).
+- `analyzeBuild(input, output, compiler)`: `analyzeSource` for a build already compiled (a build tool's), with no second full compile; one namespaced pass serves every contract. Its `metadata` must prove the output was compiled from those sources by that compiler (`LayoutIntegrityError` otherwise); incomplete output throws the new `IncompleteBuildError`.
+- Layout records keep the proxy `kind` and each namespace's slot (`namespaces`), so a saved record can stand in for `old`; `proveLocalBuild` takes both. Optional: older records still load, their namespaces unchecked.
+- `resolveProxyLayout` returns the proxy's `kind`; `SafetyReport.explain(color?)` and `NamespaceCheck.explain(color?)` (the CLI's namespace grid). New types: `SolcOutput`, `UpgradeSide`, `UpgradeOptions`, `UpgradeCheck`, `BuildAnalysis`, `BuildCompiler`.
+
+### Changed
+
+- ERC-7201: a namespace with no `$.slot :=` assignment (kept reserved) is `unused` and compared by its annotation (unless the code places a mapping or an array pointer), so such upgrades exit 0 where 0.2.0 exited 2. Dropping the last assignment of a namespace whose deployed annotation is wrong fails (`dropped`), while the real slot is still known.
+- CLI: unassigned namespaces with no problem are left out of the grid and counted in the summary ("N not assigned in code, compared by annotation"); an unread slot says which side could not be read.
+- Stricter input: `analyzeSource` checks its own compile as `analyzeBuild` does (a compiler whose version differs from the one the metadata names is a `LayoutIntegrityError`); `parseRecord` refuses a namespace key not of the form `<formula>:<id>` and a malformed `kind` or `namespaces`; `checkNamespaces` refuses slots that do not fit the layout (`LayoutIntegrityError`); `getSolc` refuses a malformed entry in solc's build list.
 - `SAFETY_ERROR_KINDS` and `SafetyErrorKind` are slotdiff's own list (a test compares it with OpenZeppelin's), so the published types no longer import an OpenZeppelin internal file.
+- Releases: the publish workflow installs dependencies without their install scripts; a weekly workflow tests against the newest OpenZeppelin upgrades-core 1.x.
 
 ## 0.2.0-alpha.1
 
