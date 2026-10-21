@@ -1,6 +1,6 @@
 {
   "name": "slotdiff",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Storage layout diff for upgradeable Solidity contracts: compare a local build or a live deployment against another",
   "license": "MIT",
   "author": "Rohit Solia (https://github.com/rokso)",
@@ -16,7 +16,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "slotdiff": "./dist/bin.js"
+    "slotdiff": "dist/bin.js"
   },
   "exports": {
     ".": {
